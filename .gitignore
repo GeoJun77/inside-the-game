@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+.env
+*.pkl
+*.parquet
+data/season/
+data/statsbomb_cache/
+data/match.jsonl
