@@ -164,8 +164,9 @@ class TacticalTools:
                   "how_to_read": {
                       "field_tilt_pct": "share of the passes played in the attacking third: "
                                         "who is pinning the other team back",
-                      "ppda": "opponent passes allowed per defensive action in the opponent's "
-                              "60% of the pitch: LOWER means more intense pressing (below 9 is "
+                      "ppda": "a team's OWN pressing: the opponent passes it allows per defensive "
+                              "action in the opponent's 60% of the pitch (Kestrel's PPDA describes "
+                              "Kestrel's pressing). LOWER means more intense pressing (below 9 is "
                               "aggressive, above 15 is passive). Null when there are too few "
                               "defensive actions to be meaningful",
                       "average_pressure_location_m": "where pressures happened, from the team's "
@@ -310,6 +311,7 @@ class TacticalTools:
             "defenders_in_box": sum(in_box(p) for p in opponents),
             "attacking_teammates_in_box": sum(in_box(p) for p in mates),
             "goalkeeper": d["goalkeeper"],
+            "goalkeeper_team": self.ctx.away["name"] if s["team"] == self.ctx.home["name"] else self.ctx.home["name"],
             "goalkeeper_off_line_m": d["gk_distance_to_goal"],
             "goalkeeper_in_frame": gk is not None,
         }

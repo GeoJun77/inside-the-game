@@ -45,14 +45,14 @@ CANDIDATES = {
 # excitement -> (style for build-up phrases, style for the climax, style degree)
 # The same style family on every line, so the voice keeps the same timbre from the first
 # second to the last: only the DEGREE of excitement changes (calm lines = low degree).
-STYLES = {1: ("excited", "excited", 0.5), 2: ("excited", "excited", 0.8),
+STYLES = {1: ("excited", "excited", 1.0), 2: ("excited", "excited", 1.15),
           3: ("excited", "excited", 1.3), 4: ("excited", "shouting", 1.6),
           5: ("excited", "shouting", 2)}
 # Styles of the voices we know, used if the region's voice list cannot be read.
 KNOWN_STYLES = {"en-US-DavisNeural": ("chat", "angry", "cheerful", "excited", "friendly", "hopeful",
                                       "sad", "shouting", "terrified", "unfriendly", "whispering")}
 # excitement -> (rate, pitch) for build-up phrases and for the climax
-PROSODY = {1: (("-4%", "-2%"), ("-4%", "-2%")), 2: (("+0%", "+0%"), ("+0%", "+2%")),
+PROSODY = {1: (("+0%", "+4%"), ("+0%", "+4%")), 2: (("+2%", "+6%"), ("+2%", "+8%")),
            3: (("+8%", "+3%"), ("+5%", "+8%")), 4: (("+14%", "+5%"), ("+6%", "+15%")),
            5: (("+18%", "+6%"), ("+8%", "+22%"))}
 PAUSE_MS = {1: 250, 2: 220, 3: 180, 4: 150, 5: 130}

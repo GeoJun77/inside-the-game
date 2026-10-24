@@ -71,7 +71,11 @@ class MatchContext:
         end = min(to_minute, self.minute)
         info = {"from_minute": from_minute, "to_minute": end,
                 "minutes_covered": max(0, end - from_minute + 1)}
-        if end < to_minute:
+        first_half_over = bool(self.seen) and self.seen[-1]["period"] == 1 and self.minute == 45
+        if first_half_over and from_minute <= 45 and to_minute >= 45:
+            # first-half added time is counted as minute 45: the window is complete
+            info["to_minute"] = "45+ (end of the first half, added time included)"
+        elif end < to_minute:
             info["note"] = (f"Window truncated at the current minute ({end}). Compare it only "
                             f"with a window of the same length.")
         return info
@@ -157,6 +161,7 @@ class MatchContext:
             "one_on_one": d["one_on_one"],
             "under_pressure": shot["under_pressure"],
             "goalkeeper": d["goalkeeper"],
+            "goalkeeper_team": self.away["name"] if shot["team"] == self.home["name"] else self.home["name"],
             "why_this_xg": [{"factor": x["label"], "value": x["value"], "effect": x["effect"]}
                             for x in d["xg_explanation"]],
         }
@@ -193,6 +198,9 @@ class MatchContext:
                 "pass_accuracy_pct": round(100 * sum(p["outcome"] == "complete" for p in passes)
                                            / len(passes)) if passes else None,
                 "fouls": sum(e["type"] == "foul" for e in mine),
+                "yellow_cards": sum(e["type"] == "card" and e["outcome"] == "yellow" for e in mine),
+                "red_cards": sum(e["type"] == "card" and e["outcome"] in ("red", "second_yellow")
+                                 for e in mine),
                 "corners": sum(e["type"] == "pass" and e["details"].get("pass_type") == "corner"
                                for e in mine),
             }
@@ -294,7 +302,8 @@ TOOL_SCHEMAS = [
     {
         "name": "summarize_period",
         "description": "Per-team statistics (goals, shots, xG, big chances, passes, pass accuracy, "
-                       "fouls, corners, possession estimate) and key moments between two minutes.",
+                       "fouls, yellow and red cards, corners, possession estimate) and key moments "
+                       "between two minutes.",
         "parameters": {"type": "object",
                        "properties": {"from_minute": {"type": "integer"},
                                       "to_minute": {"type": "integer"}},

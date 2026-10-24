@@ -27,6 +27,12 @@ BASE_IMPORTANCE = {"goal": 0.75, "red_card": 0.7, "woodwork": 0.55, "big_chance"
                    "substitution": 0.15, "injury": 0.15}
 
 
+def _shot_kind(d: dict) -> str:
+    """'header', 'right-footed shot'... so nobody has to guess how the shot was taken."""
+    body = d["body_part"].lower()
+    return "header" if body == "head" else f"{body.replace(' foot', '-footed')} shot"
+
+
 class ProducerTools:
     def __init__(self, ctx: MatchContext):
         self.ctx = ctx
@@ -62,16 +68,17 @@ class ProducerTools:
                          "importance": BASE_IMPORTANCE["goal"] + 0.15 * (meaning in ("equaliser", "go-ahead goal"))
                                        + 0.1 * (match_minute(e) >= 80) + 0.1 * (n == 3)}
                 elif e["outcome"] in ("Post", "Saved to Post"):
+                    how = {"Post": "hits the post", "Saved to Post": f"is saved onto the post by {d['goalkeeper']}"}
                     m = {"type": "woodwork", "players": players, "roles": roles,
-                         "description": f"{e['player']} hits the woodwork (xG {xg:.2f})",
+                         "description": f"{e['player']}'s {_shot_kind(d)} {how[e['outcome']]} (xG {xg:.2f})",
                          "importance": BASE_IMPORTANCE["woodwork"] + 0.3 * xg}
                 elif e["outcome"] == "Saved" and xg >= 0.2:
                     m = {"type": "big_save", "players": players, "roles": roles,
-                         "description": f"{d['goalkeeper']} saves from {e['player']} (xG {xg:.2f})",
+                         "description": f"{d['goalkeeper']} saves {e['player']}'s {_shot_kind(d)} (xG {xg:.2f})",
                          "importance": BASE_IMPORTANCE["big_save"] + 0.4 * xg}
                 elif xg >= 0.2 or d.get("big_chance"):
                     m = {"type": "big_chance", "players": players, "roles": roles,
-                         "description": f"{e['player']} misses a big chance "
+                         "description": f"{e['player']} misses a big chance with a {_shot_kind(d)} "
                                         f"(xG {xg:.2f}, {OUTCOME_WORDS.get(e['outcome'], e['outcome'].lower())})",
                          "importance": BASE_IMPORTANCE["big_chance"] + 0.4 * xg}
             elif t == "card":

@@ -53,7 +53,9 @@ Method:
 How to read the metrics:
 - Field tilt: share of attacking-third passes. Above 60% means a team is pinning the
   other back.
-- PPDA: lower means more intense pressing (below 9 aggressive, above 15 passive).
+- PPDA: lower means more intense pressing (below 9 aggressive, above 15 passive). A team's
+  PPDA describes ITS OWN pressing: to say Harbourne pressed less, use Harbourne's PPDA or
+  Harbourne's pressures, never Kestrel's PPDA.
 - Pressure location follows where the ball was; use PPDA, not pressure location, to judge
   how intensely a team presses.
 - For several shots, xG is an expected number of goals (1.4 xG = about one and a half goals).

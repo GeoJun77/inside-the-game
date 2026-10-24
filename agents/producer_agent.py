@@ -144,9 +144,12 @@ class Producer:
         self.agent = Agent(project, NAME, INSTRUCTIONS, toolbox=self.tools, schemas=TOOL_SCHEMAS,
                            verbose=verbose, output_schema=OUTPUT_SCHEMA)
 
-    def plan(self, moment: str, viewer: ViewerProfile) -> dict:
-        """The show plan for one viewer at one moment, checked against the real match."""
-        raw = self.agent.ask(f"MOMENT: {moment}\nVIEWER: {viewer.describe()}")
+    def plan(self, moment: str, viewer: ViewerProfile, notes: list[str] | None = None) -> dict:
+        """The show plan for one viewer at one moment, checked against the real match.
+        notes: what the other agents already said on air (handed over by the orchestrator)."""
+        studio = ("\nSTUDIO NOTES (already said on air by the other agents; do not ask them again): "
+                  + " | ".join(notes)) if notes else ""
+        raw = self.agent.ask(f"MOMENT: {moment}\nVIEWER: {viewer.describe()}{studio}")
         try:
             plan = json.loads(raw)
         except json.JSONDecodeError:

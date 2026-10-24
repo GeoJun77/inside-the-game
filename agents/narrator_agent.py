@@ -55,11 +55,19 @@ last lines.
   give: no "bends", "curls", "smashes", "drills it low", "rounds the keeper", "late
   challenge". Neutral verbs are fine: scores, finishes, heads in, fires, strikes.
 - Never state a player's position or role: the feed does not give it.
+- Describe what happened, never what will happen or what a team intends: no "they will
+  probe the wide channels", "the booking will make him cautious", "they will want to press".
+- Say "on the counter", "on the break" or "in transition" only when the feed says
+  "on the counter".
+- Call a player a substitute only if the feed shows him coming on.
 - Attribute every action to the player the feed names for it; when several players
   appear, check each name again before writing.
 - If nothing notable happened, write one short line about who has the ball or the
   territory, based on the match situation.
 - Do not repeat what your last lines already said.
+- "Studio notes" are what the other agents (stats, tactical analyst) said on air. You may
+  use one when it adds to the moment ("as our analyst pointed out, ..."), never contradict
+  it, and never add to it.
 - speech: the same facts as "text", written the way a TV commentator SAYS them live,
   for a voice to read. Short bursts of a few words, separated by "..." for breath; build up
   to the key word, then explode with an exclamation; capitals only for the one key word
@@ -78,6 +86,8 @@ RECAP requests ask for the match report at full time.
   line.
 - Tell the goals in the order of get_match_state, and quote each score exactly as its
   "score_after" field: never compute a score yourself.
+- Comparisons must match the numbers exactly (2 big chances to 0 means MORE, not fewer):
+  check each "more / fewer / higher" against the tool result before writing it.
 - Every claim must come from a tool result. Your tools give goals, shots, xG, passes and
   player stats, not tactics: never claim territory, pressing, transitions or shape. "speech" repeats the headline sentence only. Use excitement 2.
 
@@ -182,18 +192,21 @@ class Narrator:
         return line
 
     def _one(self, feed: list[str], situation: str, settings: ViewerSettings, minute: str,
-             cues: list) -> Commentary:
+             cues: list, notes: list[str] | None = None) -> Commentary:
         """One model call: the shared feed, written for one audience."""
         previous = " | ".join(self.last_lines.get(settings, [])[-3:]) or "none"
-        request = (f"LIVE\n{settings.header()}\n{situation}\n"
+        studio = ("Studio notes: " + " | ".join(notes) + "\n") if notes else ""
+        request = (f"LIVE\n{settings.header()}\n{situation}\n{studio}"
                    f"Your last lines: {previous}\nFeed:\n" + "\n".join(feed))
         text, speech, excitement = parse_output(self.agent.ask(request))
         self.last_lines.setdefault(settings, []).append(text)
         audio = self.voice.speak(speech, settings.language, excitement) if self.voice else None
         return Commentary(minute, text, excitement, settings, speech, audio, cues)
 
-    def comment(self, batch: list[dict], audiences: list[ViewerSettings]) -> dict[ViewerSettings, Commentary]:
-        """Commentary of one batch for every audience: one feed, one model call per audience."""
+    def comment(self, batch: list[dict], audiences: list[ViewerSettings],
+                notes: list[str] | None = None) -> dict[ViewerSettings, Commentary]:
+        """Commentary of one batch for every audience: one feed, one model call per audience.
+        notes: what the other agents said on air (handed over by the orchestrator)."""
         feed = describe(batch, self.teams, self.history)
         self.history.extend(batch)
         if len(feed) <= 1 or not audiences:      # nothing notable: no model call, no invention
@@ -201,7 +214,8 @@ class Narrator:
         situation, minute = self._situation(), minute_label(batch[-1])
         cues = crowd.reactions_for(batch, self.teams)    # same stadium for every viewer
         with ThreadPoolExecutor(max_workers=min(8, len(audiences))) as pool:
-            results = list(pool.map(lambda s: self._one(feed, situation, s, minute, cues), audiences))
+            results = list(pool.map(lambda s: self._one(feed, situation, s, minute, cues, notes),
+                                    audiences))
         return {c.settings: c for c in results}
 
     def recap(self, settings: ViewerSettings) -> Commentary:
