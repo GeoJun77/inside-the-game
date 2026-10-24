@@ -50,6 +50,11 @@ def create_agent(project: AIProjectClient, name: str, instructions: str, schemas
     )
 
 
+REQUEST_HEADER = ("REQUEST FROM THE {sender} AGENT. Answer it fully and directly in at most five "
+                  "sentences, for a broadcast audience. Never ask a question back and never offer "
+                  "to do more: there is no conversation, only this answer.\n")
+
+
 class Agent:
     """A Foundry agent plus the Python toolbox that answers its tool calls."""
 
@@ -68,6 +73,10 @@ class Agent:
     def label(self) -> str:
         return f"{self.definition.name} (version {self.definition.version})"
 
+    def ask_from(self, sender: str, question: str) -> str:
+        """A question handed over by another agent (agent-to-agent delegation)."""
+        return self.ask(REQUEST_HEADER.format(sender=sender.upper()) + question)
+
     def run_tool(self, name: str, arguments: str) -> dict:
         """Execute the Python method the model asked for (only whitelisted tools)."""
         if name not in self.allowed:
@@ -77,7 +86,7 @@ class Agent:
         except Exception as exc:  # the model must get an answer, not a crash
             return {"error": f"{type(exc).__name__}: {exc}"}
 
-    def ask(self, question: str, max_rounds: int = 8) -> str:
+    def ask(self, question: str, max_rounds: int = 10) -> str:
         """Send a question and answer the tool calls until the model returns text."""
         self.trace = []
         response = self.openai.responses.create(input=question)
@@ -95,4 +104,11 @@ class Agent:
                                 "output": json.dumps(result, ensure_ascii=False)})
             response = self.openai.responses.create(input=outputs,
                                                     previous_response_id=response.id)
-        return "Sorry, I could not finish the analysis."
+        # Too many tool calls: ask for the answer with what has been gathered so far.
+        calls = [item for item in response.output if item.type == "function_call"]
+        final_input = [{"type": "function_call_output", "call_id": c.call_id,
+                        "output": json.dumps({"error": "Tool budget used up."})} for c in calls]
+        final_input.append({"role": "user", "content": "Stop calling tools. Answer now with the "
+                                                       "data you already have."})
+        response = self.openai.responses.create(input=final_input, previous_response_id=response.id)
+        return response.output_text or "Sorry, I could not finish the analysis."

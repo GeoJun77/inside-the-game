@@ -9,6 +9,7 @@ from __future__ import annotations
 import unicodedata
 
 from matchsim.ratings import player_match_stats
+from matchsim.stats import team_stats
 
 
 def _normalise(text: str) -> str:
@@ -105,6 +106,7 @@ class MatchContext:
             "minute": self.minute,
             "home_team": self.home["name"],
             "away_team": self.away["name"],
+            "venue": self.all_events[0]["details"]["venue"],
             "score": self.score,
             "goals": goals,
             "red_cards": reds,
@@ -113,9 +115,13 @@ class MatchContext:
         # (the 5-minute snapshot can miss a shot taken just after it).
         state["xg"] = self._xg_between(0, self.minute)
         state["xg_last_15_minutes"] = self._xg_between(max(0, self.minute - 15), self.minute)
+        # Possession from the time each team had the ball: the same figure as the stats panel.
+        if any(e["type"] == "match_start" for e in self.seen[:1]):
+            ts = team_stats(self.seen)
+            state["possession_pct"] = {"home": round(ts[self.home["id"]]["possession_pct"]),
+                                       "away": round(ts[self.away["id"]]["possession_pct"])}
         if snapshot:
             state.update({
-                "possession_pct": snapshot["possession_pct"],
                 "momentum": self._momentum(snapshot["momentum"]),
                 "formations": snapshot["formations"],
                 "mentality": snapshot["mentality"],
@@ -130,8 +136,8 @@ class MatchContext:
         shot = shots[-1] if shot_event_id == 0 else next(
             (s for s in shots if s["event_id"] == shot_event_id), None)
         if shot is None:
-            return {"error": f"No shot with event id {shot_event_id}.",
-                    "recent_shot_ids": [s["event_id"] for s in shots[-5:]]}
+            return {"error": f"No shot with event id {shot_event_id}. Pick one from this list.",
+                    "shots": self.list_shots("", "")["shots"]}
         d = shot["details"]
         return {
             "event_id": shot["event_id"],
@@ -154,6 +160,20 @@ class MatchContext:
             "why_this_xg": [{"factor": x["label"], "value": x["value"], "effect": x["effect"]}
                             for x in d["xg_explanation"]],
         }
+
+    def list_shots(self, team: str, player: str) -> dict:
+        """Every shot so far (id, minute, shooter, outcome, xG), to find a shot's event id."""
+        out = []
+        for e in self.seen:
+            if e["type"] != "shot":
+                continue
+            if team and _normalise(team) not in _normalise(e["team"]):
+                continue
+            if player and _normalise(player) not in _normalise(e["player"]):
+                continue
+            out.append({"event_id": e["event_id"], "minute": minute_label(e), "team": e["team"],
+                        "shooter": e["player"], "outcome": e["outcome"], "xg": e["details"]["xg"]})
+        return {"count": len(out), "shots": out}
 
     def summarize_period(self, from_minute: int, to_minute: int) -> dict:
         """Per-team box score between two minutes (inclusive)."""
@@ -261,6 +281,15 @@ TOOL_SCHEMAS = [
                        "properties": {"shot_event_id": {"type": "integer",
                                                         "description": "Event id of the shot, or 0 for the latest shot."}},
                        "required": ["shot_event_id"], "additionalProperties": False},
+    },
+    {
+        "name": "list_shots",
+        "description": "Every shot so far with its event id, minute, shooter, outcome and xG. "
+                       "Use it to find the event id of a shot (e.g. 'Ashworth's shot at 29'') before "
+                       "calling get_shot_details. Filter by team and/or player, or empty strings.",
+        "parameters": {"type": "object",
+                       "properties": {"team": {"type": "string"}, "player": {"type": "string"}},
+                       "required": ["team", "player"], "additionalProperties": False},
     },
     {
         "name": "summarize_period",

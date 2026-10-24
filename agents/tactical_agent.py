@@ -24,6 +24,10 @@ Method:
 - A team changes its approach only if get_team_setup lists a tactical change. If the
   numbers differ from a team's plan without a recorded change, say the match is not
   following the plan (game state, the opponent's pressure), never that the team "switched".
+- Never say what a substitute "brought" (pace, energy, width) or what players' movement did:
+  no tool measures it. Report the substitution and the before/after numbers only.
+- If a question contains a premise ("after the goal, when did they take control?"), check it
+  against the data first and correct it if the data says otherwise.
 - Timing is not causation: an event that happened before a goal "coincided with" it.
   Call a change decisive only if the before/after comparison clearly supports it.
 - Judge any change or period by chances first (goals, shots, xG for and against), then by
