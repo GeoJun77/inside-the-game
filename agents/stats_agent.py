@@ -5,18 +5,11 @@ Run from the repository root:
 """
 from __future__ import annotations
 
-import json
-import os
-
-from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import FunctionTool, PromptAgentDefinition
-from azure.identity import DefaultAzureCredential
-from dotenv import load_dotenv
-
 from agents.match_tools import TOOL_SCHEMAS, MatchContext
+from agents.runtime import Agent, connect
 from matchsim import build_league, get_team, simulate_match
 
-AGENT_NAME = "stats-agent"
+NAME = "stats-agent"
 
 INSTRUCTIONS = """You are the Stats Agent of a live football broadcast.
 You answer questions about the match that is being played, for commentators and fans.
@@ -48,75 +41,26 @@ Rules:
 """
 
 
-def build_agent(project: AIProjectClient):
-    """Create (or add a new version of) the Stats Agent in Foundry."""
-    tools = [FunctionTool(name=t["name"], description=t["description"],
-                          parameters=t["parameters"], strict=True)
-             for t in TOOL_SCHEMAS]
-    return project.agents.create_version(
-        agent_name=AGENT_NAME,
-        definition=PromptAgentDefinition(
-            model=os.environ["FOUNDRY_MODEL"],
-            instructions=INSTRUCTIONS,
-            tools=tools,
-        ),
-    )
-
-
-def run_tool(ctx: MatchContext, name: str, arguments: str) -> dict:
-    """Execute the Python function that the model asked for."""
-    args = json.loads(arguments or "{}")
-    tool = getattr(ctx, name, None)
-    if name not in {t["name"] for t in TOOL_SCHEMAS} or tool is None:
-        return {"error": f"Unknown tool {name}."}
-    try:
-        return tool(**args)
-    except Exception as exc:  # the model must get an answer, not a crash
-        return {"error": f"{type(exc).__name__}: {exc}"}
-
-
-def ask(openai, ctx: MatchContext, question: str, max_rounds: int = 6, verbose: bool = True) -> str:
-    """Send a question and answer the model's tool calls until it gives a final text."""
-    response = openai.responses.create(input=question)
-    for _ in range(max_rounds):
-        calls = [item for item in response.output if item.type == "function_call"]
-        if not calls:
-            return response.output_text
-        outputs = []
-        for call in calls:
-            result = run_tool(ctx, call.name, call.arguments)
-            if verbose:
-                print(f"  [tool] {call.name}({call.arguments})")
-            outputs.append({"type": "function_call_output", "call_id": call.call_id,
-                            "output": json.dumps(result, ensure_ascii=False)})
-        response = openai.responses.create(input=outputs, previous_response_id=response.id)
-    return "Sorry, I could not finish the analysis."
+def build(project, ctx: MatchContext, verbose: bool = True) -> Agent:
+    return Agent(project, NAME, INSTRUCTIONS, toolbox=ctx, schemas=TOOL_SCHEMAS, verbose=verbose)
 
 
 def main():
-    load_dotenv()
-    project = AIProjectClient(endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
-                              credential=DefaultAzureCredential())
-    agent = build_agent(project)
-    print(f"Agent ready: {agent.name} (version {agent.version})\n")
-    openai = project.get_openai_client(agent_name=agent.name)
-
+    project = connect()
     league = build_league()
-    events = simulate_match(get_team(league, "HAR"), get_team(league, "KES"), seed=7)
-    ctx = MatchContext(events)
+    ctx = MatchContext(simulate_match(get_team(league, "HAR"), get_team(league, "KES"), seed=7))
     ctx.advance_to(60)
+    agent = build(project, ctx)
+    print(f"Agent ready: {agent.label}\n")
     print(f"Live: {ctx.home['name']} {ctx.score['home']}-{ctx.score['away']} "
           f"{ctx.away['name']} ({ctx.minute}')\n")
 
-    questions = [
-        "What's the story of the match so far?",
-        "Was the last goal a good chance? Explain the xG.",
-        "How is Théo Thibault playing?",
-        "Who has been the better team since half-time?",
-    ]
-    for q in questions:
+    for q in ["What's the story of the match so far?",
+              "Was the last goal a good chance? Explain the xG.",
+              "How is Théo Thibault playing?",
+              "Who has been the better team since half-time?"]:
         print(f"Q: {q}")
-        print(f"A: {ask(openai, ctx, q)}\n")
+        print(f"A: {agent.ask(q)}\n")
 
 
 if __name__ == "__main__":

@@ -17,6 +17,30 @@ def _normalise(text: str) -> str:
     return "".join(c for c in text if not unicodedata.combining(c)).lower().strip()
 
 
+def match_minute(e: dict) -> int:
+    """Minute used for every time window, so the two halves never overlap.
+
+    The engine's clock restarts at 45:00 in the second half, while first-half
+    added time runs 45:00, 46:00, 47:00... So we count all first-half added
+    time as minute 45, and the second half from minute 46 onwards.
+    """
+    if e["period"] == 1:
+        return min(e["minute"], 45)
+    if e["period"] >= 2:
+        return max(e["minute"], 46)
+    return e["minute"]
+
+
+def minute_label(e: dict) -> str:
+    """Broadcast-style minute: '23', '45+2', '90+4'."""
+    m = e["minute"]
+    if e["period"] == 1 and m >= 45:
+        return f"45+{m - 44}"
+    if e["period"] >= 2 and m >= 90:
+        return f"90+{m - 89}"
+    return str(match_minute(e))
+
+
 class MatchContext:
     def __init__(self, events: list[dict]):
         self.all_events = events
@@ -28,15 +52,32 @@ class MatchContext:
     # ---------- live feed ----------
     def advance_to(self, minute: int) -> None:
         """Mark every event up to `minute` as seen (used for demos and tests)."""
-        self.seen = [e for e in self.all_events if e["minute"] <= minute]
+        self.seen = [e for e in self.all_events if match_minute(e) <= minute]
 
     def push(self, event: dict) -> None:
         """Add one event from the live stream."""
         self.seen.append(event)
 
+    def window(self, from_minute: int, to_minute: int) -> list[dict]:
+        """Events seen between two match minutes (inclusive)."""
+        return [e for e in self.seen if from_minute <= match_minute(e) <= to_minute]
+
+    def coverage(self, from_minute: int, to_minute: int) -> dict:
+        """What a window really covers: it cannot go beyond the current minute.
+
+        Returned with every window so that the agents compare periods of equal length.
+        """
+        end = min(to_minute, self.minute)
+        info = {"from_minute": from_minute, "to_minute": end,
+                "minutes_covered": max(0, end - from_minute + 1)}
+        if end < to_minute:
+            info["note"] = (f"Window truncated at the current minute ({end}). Compare it only "
+                            f"with a window of the same length.")
+        return info
+
     @property
     def minute(self) -> int:
-        return self.seen[-1]["minute"] if self.seen else 0
+        return match_minute(self.seen[-1]) if self.seen else 0
 
     @property
     def score(self) -> dict:
@@ -49,10 +90,10 @@ class MatchContext:
     def get_match_state(self) -> dict:
         """Score, minute and the latest 5-minute snapshot (possession, xG, momentum...)."""
         snapshot = next((e["details"] for e in reversed(self.seen) if e["type"] == "match_state"), None)
-        goals = [{"minute": e["minute"], "team": e["team"], "scorer": e["details"]["scorer"],
+        goals = [{"minute": minute_label(e), "team": e["team"], "scorer": e["details"]["scorer"],
                   "assist": e["details"]["assist"], "xg": e["details"]["xg"]}
                  for e in self.seen if e["type"] == "goal"]
-        reds = [{"minute": e["minute"], "team": e["team"], "player": e["player"]}
+        reds = [{"minute": minute_label(e), "team": e["team"], "player": e["player"]}
                 for e in self.seen if e["type"] == "card" and e["outcome"] in ("red", "second_yellow")]
         state = {
             "minute": self.minute,
@@ -88,7 +129,7 @@ class MatchContext:
         d = shot["details"]
         return {
             "event_id": shot["event_id"],
-            "minute": shot["minute"],
+            "minute": minute_label(shot),
             "team": shot["team"],
             "shooter": shot["player"],
             "assisted_by": d["assist_player"],
@@ -110,7 +151,7 @@ class MatchContext:
 
     def summarize_period(self, from_minute: int, to_minute: int) -> dict:
         """Per-team box score between two minutes (inclusive)."""
-        window = [e for e in self.seen if from_minute <= e["minute"] <= to_minute]
+        window = self.window(from_minute, to_minute)
         teams = {}
         for team in (self.home, self.away):
             mine = [e for e in window if e["team_id"] == team["id"]]
@@ -133,11 +174,11 @@ class MatchContext:
         for t in teams.values():
             t["possession_pct_estimate"] = round(100 * t["passes"] / total_passes)
         key_moments = [
-            {"minute": e["minute"], "type": e["type"], "team": e["team"],
+            {"minute": minute_label(e), "type": e["type"], "team": e["team"],
              "description": self._describe(e)}
             for e in window if e["type"] in ("goal", "card", "substitution", "tactical_change", "injury")
         ]
-        return {"from_minute": from_minute, "to_minute": to_minute, "teams": teams,
+        return {**self.coverage(from_minute, to_minute), "teams": teams,
                 "key_moments": key_moments}
 
     def get_player_stats(self, player_name: str) -> dict:
@@ -164,8 +205,8 @@ class MatchContext:
     def _xg_between(self, from_minute: int, to_minute: int) -> dict:
         """Total xG of each side between two minutes (inclusive), from the shots seen."""
         xg = {"home": 0.0, "away": 0.0}
-        for e in self.seen:
-            if e["type"] == "shot" and from_minute <= e["minute"] <= to_minute:
+        for e in self.window(from_minute, to_minute):
+            if e["type"] == "shot":
                 xg["home" if e["team_id"] == self.home["id"] else "away"] += e["details"]["xg"]
         return {side: round(v, 2) for side, v in xg.items()}
 
