@@ -8,3 +8,5 @@ __pycache__/
 data/season/
 data/statsbomb_cache/
 data/match.jsonl
+data/audio/
+.pytest_cache/

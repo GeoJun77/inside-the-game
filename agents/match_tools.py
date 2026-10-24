@@ -90,9 +90,15 @@ class MatchContext:
     def get_match_state(self) -> dict:
         """Score, minute and the latest 5-minute snapshot (possession, xG, momentum...)."""
         snapshot = next((e["details"] for e in reversed(self.seen) if e["type"] == "match_state"), None)
-        goals = [{"minute": minute_label(e), "team": e["team"], "scorer": e["details"]["scorer"],
-                  "assist": e["details"]["assist"], "xg": e["details"]["xg"]}
-                 for e in self.seen if e["type"] == "goal"]
+        goals, running = [], {"home": 0, "away": 0}
+        for e in self.seen:
+            if e["type"] == "goal":
+                running["home" if e["team_id"] == self.home["id"] else "away"] += 1
+                # the score after each goal is given, so no agent has to recount it
+                goals.append({"minute": minute_label(e), "team": e["team"],
+                              "scorer": e["details"]["scorer"], "assist": e["details"]["assist"],
+                              "xg": e["details"]["xg"],
+                              "score_after": f"{self.home['name']} {running['home']}-{running['away']} {self.away['name']}"})
         reds = [{"minute": minute_label(e), "team": e["team"], "player": e["player"]}
                 for e in self.seen if e["type"] == "card" and e["outcome"] in ("red", "second_yellow")]
         state = {

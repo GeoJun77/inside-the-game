@@ -11,7 +11,9 @@ import json
 import os
 
 from azure.ai.projects import AIProjectClient
-from azure.ai.projects.models import FunctionTool, PromptAgentDefinition
+from azure.ai.projects.models import (FunctionTool, PromptAgentDefinition,
+                                      PromptAgentDefinitionTextOptions, Reasoning,
+                                      TextResponseFormatJsonSchema)
 from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 
@@ -23,15 +25,28 @@ def connect() -> AIProjectClient:
                            credential=DefaultAzureCredential())
 
 
-def create_agent(project: AIProjectClient, name: str, instructions: str, schemas: list[dict]):
-    """Create the agent in Foundry, or add a new version if it already exists."""
+def create_agent(project: AIProjectClient, name: str, instructions: str, schemas: list[dict],
+                 reasoning_effort: str | None = None, output_schema: dict | None = None):
+    """Create the agent in Foundry, or add a new version if it already exists.
+
+    reasoning_effort ("minimal", "low", "medium", "high") trades depth for speed:
+    live commentary needs fast answers, analysis can think longer.
+    output_schema: a JSON schema the answer must follow (structured output), so the
+    app can read fields such as {"text": ..., "excitement": ...} reliably.
+    """
+    text = None
+    if output_schema:
+        text = PromptAgentDefinitionTextOptions(format=TextResponseFormatJsonSchema(
+            name=f"{name.replace('-', '_')}_output", schema=output_schema, strict=True))
     tools = [FunctionTool(name=s["name"], description=s["description"],
                           parameters=s["parameters"], strict=True)
              for s in schemas]
     return project.agents.create_version(
         agent_name=name,
-        definition=PromptAgentDefinition(model=os.environ["FOUNDRY_MODEL"],
-                                         instructions=instructions, tools=tools),
+        definition=PromptAgentDefinition(
+            model=os.environ["FOUNDRY_MODEL"], instructions=instructions, tools=tools,
+            reasoning=Reasoning(effort=reasoning_effort) if reasoning_effort else None,
+            text=text),
     )
 
 
@@ -39,8 +54,10 @@ class Agent:
     """A Foundry agent plus the Python toolbox that answers its tool calls."""
 
     def __init__(self, project: AIProjectClient, name: str, instructions: str,
-                 toolbox, schemas: list[dict], verbose: bool = True):
-        self.definition = create_agent(project, name, instructions, schemas)
+                 toolbox, schemas: list[dict], verbose: bool = True,
+                 reasoning_effort: str | None = None, output_schema: dict | None = None):
+        self.definition = create_agent(project, name, instructions, schemas,
+                                       reasoning_effort, output_schema)
         self.openai = project.get_openai_client(agent_name=self.definition.name)
         self.toolbox = toolbox
         self.allowed = {s["name"] for s in schemas}
