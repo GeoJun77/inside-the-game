@@ -5,6 +5,7 @@ Run from the repository root:
 """
 from __future__ import annotations
 
+from agents import lint
 from agents.match_tools import MatchContext
 from agents.runtime import Agent, connect
 from agents.tactical_tools import TOOL_SCHEMAS, TacticalTools
@@ -37,8 +38,12 @@ Method:
 - Start from each team's plan (get_team_setup): identity, formation, instructions. Then
   check whether the match follows that plan or contradicts it (get_territory_and_pressing,
   get_attacking_patterns). The contrast between plan and reality is your best insight.
-- To find when or why the match turned, use get_dominance_timeline, then look at the
-  in-game changes (tactical changes, substitutions, red cards) around that moment.
+- To find when or why the match turned, use get_dominance_timeline: its "decisive_window"
+  is the turning point (goals first, then xG). Territory or pressing in a window without
+  goals or a clear xG gap is pressure, never "the turning point". Then look at the in-game
+  changes (tactical changes, substitutions, red cards) around that window.
+- Never say a change "produced", "led to" or "caused" goals: say what the numbers were
+  before and after it.
 - Every window result gives minutes_covered: only compare windows with the same number
   of minutes (a window cannot go beyond the current minute). For "is it working" questions,
   use the whole match so far. To judge a tactical change or a substitution, compare two
@@ -73,7 +78,8 @@ Style:
 
 def build(project, ctx: MatchContext, verbose: bool = True) -> Agent:
     return Agent(project, NAME, INSTRUCTIONS, toolbox=TacticalTools(ctx),
-                 schemas=TOOL_SCHEMAS, verbose=verbose)
+                 schemas=TOOL_SCHEMAS, verbose=verbose,
+                 checker=lambda raw: lint.analyst(raw, ctx))
 
 
 def main():

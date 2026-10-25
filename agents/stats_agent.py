@@ -5,6 +5,7 @@ Run from the repository root:
 """
 from __future__ import annotations
 
+from agents import lint
 from agents.match_tools import TOOL_SCHEMAS, MatchContext
 from agents.runtime import Agent, connect
 from matchsim import build_league, get_team, simulate_match
@@ -44,7 +45,8 @@ Rules:
 
 
 def build(project, ctx: MatchContext, verbose: bool = True) -> Agent:
-    return Agent(project, NAME, INSTRUCTIONS, toolbox=ctx, schemas=TOOL_SCHEMAS, verbose=verbose)
+    return Agent(project, NAME, INSTRUCTIONS, toolbox=ctx, schemas=TOOL_SCHEMAS, verbose=verbose,
+                 checker=lambda raw: lint.analyst(raw, ctx))
 
 
 def main():

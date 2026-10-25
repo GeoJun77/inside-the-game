@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import threading
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -89,6 +90,7 @@ class BroadcastItem:
     audience: str      # who sees it ("all", an audience tag or a viewer id)
     payload: dict
     degraded: bool = False   # produced by a fallback because an agent failed
+    id: int = 0              # set when published (the web app uses it, e.g. for audio)
 
 
 @dataclass
@@ -130,6 +132,8 @@ class Supervisor:
             except Exception as exc:         # noqa: BLE001 - any agent error must not stop the show
                 s.failures += 1
                 print(f"   !! {agent} failed (attempt {attempt}): {type(exc).__name__}: {exc}")
+                if attempt == 1:
+                    time.sleep(2)            # short pause: transient errors often clear
         s.streak += 1
         if s.streak >= 3:
             s.skip, s.streak = 5, 0
@@ -173,6 +177,8 @@ class Orchestrator:
         self.panel_tools = ProducerTools(self.ctx)
         self.reviews: list[tuple[int, dict]] = []     # (minute due, tactical_change event)
         self.panels_done: set[int] = set()
+        self.listeners: list = []                     # callbacks: the web server streams items
+        self._lock = threading.Lock()
 
         self.stats = stats_agent.build(project, self.ctx, verbose=False)
         self.tactical = tactical_agent.build(project, self.ctx, verbose=False)
@@ -187,15 +193,24 @@ class Orchestrator:
     def minute(self) -> str:
         return minute_label(self.ctx.seen[-1]) if self.ctx.seen else "0"
 
+    def rewrites(self) -> dict[str, int]:
+        """How many answers each agent had to write again after a Python rule check."""
+        return {"narrator": self.narrator.agent.rewrites, "recap": self.narrator.recap_agent.rewrites,
+                "stats": self.stats.rewrites, "tactical": self.tactical.rewrites}
+
     def audiences(self) -> list[ViewerSettings]:
         """Distinct audiences among the viewers: one model call each, shared by all its viewers."""
         return sorted({ViewerSettings(v.language, v.audience, v.favourite_team)
                        for v in self.viewers.values()}, key=lambda s: s.tag())
 
     def publish(self, item: BroadcastItem) -> None:
-        self.timeline.append(item)
+        with self._lock:
+            item.id = len(self.timeline) + 1
+            self.timeline.append(item)
         if self.echo:
             self._print(item)
+        for listener in self.listeners:
+            listener(item)
 
     def _print(self, it: BroadcastItem) -> None:
         tag = f"[{it.minute}'] {it.kind.upper()} ({it.agent} -> {it.audience})" + (" [fallback]" if it.degraded else "")
@@ -445,6 +460,8 @@ def main():
         kinds[it.kind] += 1
     print("Items on air: " + ", ".join(f"{k} {v}" for k, v in sorted(kinds.items())))
     print(f"Shared memory: {len(orch.memory.notes)} notes handed between agents")
+    print("Answers sent back for a rewrite by the rule checks: " + ", ".join(
+        f"{name} {n}" for name, n in orch.rewrites().items()))
 
 
 if __name__ == "__main__":

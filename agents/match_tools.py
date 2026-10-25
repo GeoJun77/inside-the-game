@@ -18,6 +18,11 @@ def _normalise(text: str) -> str:
     return "".join(c for c in text if not unicodedata.combining(c)).lower().strip()
 
 
+def _round(value, digits: int):
+    """Round numbers for the agents (they quote what they read); leave anything else as is."""
+    return round(value, digits) if isinstance(value, (int, float)) and not isinstance(value, bool) else value
+
+
 def match_minute(e: dict) -> int:
     """Minute used for every time window, so the two halves never overlap.
 
@@ -60,8 +65,15 @@ class MatchContext:
         self.seen.append(event)
 
     def window(self, from_minute: int, to_minute: int) -> list[dict]:
-        """Events seen between two match minutes (inclusive)."""
-        return [e for e in self.seen if from_minute <= match_minute(e) <= to_minute]
+        """Events seen between two match minutes (inclusive).
+
+        A window starting at minute 1 also takes minute 0 (the first seconds of the
+        match), and a window ending at 90 also takes second-half added time (90+1,
+        90+2...), so "1-45" plus "46-90" always adds up to the whole match.
+        """
+        lo = -1 if from_minute <= 1 else from_minute
+        hi = 10_000 if to_minute >= 90 else to_minute
+        return [e for e in self.seen if lo <= match_minute(e) <= hi]
 
     def coverage(self, from_minute: int, to_minute: int) -> dict:
         """What a window really covers: it cannot go beyond the current minute.
@@ -102,7 +114,7 @@ class MatchContext:
                 # the score after each goal is given, so no agent has to recount it
                 goals.append({"minute": minute_label(e), "team": e["team"],
                               "scorer": e["details"]["scorer"], "assist": e["details"]["assist"],
-                              "xg": e["details"]["xg"],
+                              "xg": round(e["details"]["xg"], 2),
                               "score_after": f"{self.home['name']} {running['home']}-{running['away']} {self.away['name']}"})
         reds = [{"minute": minute_label(e), "team": e["team"], "player": e["player"]}
                 for e in self.seen if e["type"] == "card" and e["outcome"] in ("red", "second_yellow")]
@@ -150,19 +162,19 @@ class MatchContext:
             "shooter": shot["player"],
             "assisted_by": d["assist_player"],
             "outcome": shot["outcome"],
-            "xg": d["xg"],
+            "xg": round(d["xg"], 2),
             "assist_type": d["assist_type"],
             "body_part": d["body_part"],
             "shot_type": d["shot_type"],
-            "distance_m": d["distance"],
-            "angle_deg": d["angle_deg"],
+            "distance_m": round(d["distance"], 1),
+            "angle_deg": round(d["angle_deg"]),
             "defenders_in_shooting_cone": d["n_defenders_in_cone"],
-            "nearest_defender_m": d["nearest_defender_dist"],
+            "nearest_defender_m": _round(d["nearest_defender_dist"], 1),
             "one_on_one": d["one_on_one"],
             "under_pressure": shot["under_pressure"],
             "goalkeeper": d["goalkeeper"],
             "goalkeeper_team": self.away["name"] if shot["team"] == self.home["name"] else self.home["name"],
-            "why_this_xg": [{"factor": x["label"], "value": x["value"], "effect": x["effect"]}
+            "why_this_xg": [{"factor": x["label"], "value": _round(x["value"], 1), "effect": _round(x["effect"], 2)}
                             for x in d["xg_explanation"]],
         }
 
@@ -177,7 +189,7 @@ class MatchContext:
             if player and _normalise(player) not in _normalise(e["player"]):
                 continue
             out.append({"event_id": e["event_id"], "minute": minute_label(e), "team": e["team"],
-                        "shooter": e["player"], "outcome": e["outcome"], "xg": e["details"]["xg"]})
+                        "shooter": e["player"], "outcome": e["outcome"], "xg": round(e["details"]["xg"], 2)})
         return {"count": len(out), "shots": out}
 
     def summarize_period(self, from_minute: int, to_minute: int) -> dict:

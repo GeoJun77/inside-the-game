@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Inside the Game</title>
+  <meta name="description" content="A live football broadcast run by five AI agents: commentary, tactics, stats and a personalised show.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <!-- ===================== match setup ===================== -->
+  <section id="setup" class="setup" aria-labelledby="setup-title">
+    <div class="setup-inner">
+      <h1 id="setup-title" class="brand">Inside the Game</h1>
+      <p class="setup-lead">A live match, called by five AI agents. Pick the fixture, then take your seat.</p>
+
+      <form id="match-form" class="setup-step">
+        <h2>The fixture</h2>
+        <div class="fixture">
+          <label>Home
+            <select id="home-team" required></select>
+          </label>
+          <span class="vs" aria-hidden="true">v</span>
+          <label>Away
+            <select id="away-team" required></select>
+          </label>
+        </div>
+        <div class="row">
+          <label>Match seed
+            <input id="seed" type="number" value="7" min="1" max="99999">
+          </label>
+          <label>Match speed
+            <select id="speed">
+              <option value="15">Relaxed (90 min in 6 min)</option>
+              <option value="25" selected>Broadcast (90 min in 4 min)</option>
+              <option value="45">Quick (90 min in 2 min)</option>
+            </select>
+          </label>
+        </div>
+        <button type="submit" class="btn-primary">Set up the match</button>
+        <p id="match-status" class="form-status" role="status"></p>
+      </form>
+
+      <form id="profile-form" class="setup-step" hidden>
+        <h2>Your seat</h2>
+        <fieldset class="choice">
+          <legend>How do you want it called?</legend>
+          <label><input type="radio" name="audience" value="fan" checked> As a fan</label>
+          <label><input type="radio" name="audience" value="analyst"> As an analyst</label>
+        </fieldset>
+        <div class="row">
+          <label>Your club
+            <select id="favourite"></select>
+          </label>
+          <label>Follow a player
+            <select id="follow"></select>
+          </label>
+        </div>
+        <div class="row">
+          <label>Commentary language
+            <select id="language">
+              <option>English</option><option>French</option><option>Spanish</option>
+              <option>Portuguese</option><option>German</option><option>Italian</option>
+            </select>
+          </label>
+          <fieldset class="choice compact">
+            <legend>Sound</legend>
+            <label><input type="checkbox" id="opt-voice" checked> Commentator</label>
+            <label><input type="checkbox" id="opt-crowd" checked> Stadium</label>
+          </fieldset>
+        </div>
+        <button type="submit" class="btn-primary">Kick off</button>
+        <p id="profile-status" class="form-status" role="status"></p>
+      </form>
+    </div>
+  </section>
+
+  <!-- ===================== the broadcast ===================== -->
+  <main id="broadcast" class="broadcast" hidden>
+    <header class="scoreboard" aria-live="polite">
+      <div class="team home"><span class="team-bar" id="home-bar"></span><span id="home-name" class="team-name"></span></div>
+      <div class="score"><span id="home-score">0</span><span class="dash">–</span><span id="away-score">0</span></div>
+      <div class="team away"><span id="away-name" class="team-name"></span><span class="team-bar" id="away-bar"></span></div>
+      <div class="clock"><span id="clock">0'</span><span id="phase" class="phase">Pre-match</span></div>
+      <div class="sound-toggles">
+        <button id="toggle-voice" class="toggle" aria-pressed="true" title="Commentator voice">Voice</button>
+        <button id="toggle-crowd" class="toggle" aria-pressed="true" title="Stadium sound">Crowd</button>
+      </div>
+    </header>
+
+    <div class="stage">
+      <section class="pitch-area" aria-label="Live pitch">
+        <div class="pitch-wrap">
+          <canvas id="pitch" width="1240" height="840" aria-label="Animated pitch showing the ball and the players"></canvas>
+          <div id="moment" class="moment" hidden></div>
+        </div>
+        <p id="ticker" class="ticker" aria-live="off"></p>
+
+        <div class="agents" aria-label="The agents at work">
+          <div class="agent" data-agent="narrator"><span class="dot"></span><b>Narrator</b><small>Commentary</small></div>
+          <div class="agent" data-agent="stats"><span class="dot"></span><b>Stats</b><small>Numbers and xG</small></div>
+          <div class="agent" data-agent="tactical"><span class="dot"></span><b>Tactical analyst</b><small>How and why</small></div>
+          <div class="agent" data-agent="producer"><span class="dot"></span><b>Producer</b><small>Your show</small></div>
+          <div class="agent" data-agent="router"><span class="dot"></span><b>Router</b><small>Your questions</small></div>
+        </div>
+      </section>
+
+      <section class="studio" aria-label="The studio">
+        <nav class="tabs" role="tablist">
+          <button role="tab" aria-selected="true" data-tab="feed">Live</button>
+          <button role="tab" aria-selected="false" data-tab="stats">Stats</button>
+          <button role="tab" aria-selected="false" data-tab="show">Your show</button>
+          <button role="tab" aria-selected="false" data-tab="agents">Behind the scenes</button>
+        </nav>
+
+        <div class="panel" id="tab-feed" role="tabpanel">
+          <ol id="feed" class="feed" aria-live="polite"></ol>
+          <p id="feed-empty" class="empty">Commentary starts at kick-off.</p>
+        </div>
+        <div class="panel" id="tab-stats" role="tabpanel" hidden>
+          <div id="stats-panel" class="stats-panel"><p class="empty">The stats panel appears after 15 minutes.</p></div>
+        </div>
+        <div class="panel" id="tab-show" role="tabpanel" hidden>
+          <div id="show-plan"><p class="empty">Your Producer prepares a personal show at half-time and full time.</p></div>
+        </div>
+        <div class="panel" id="tab-agents" role="tabpanel" hidden>
+          <div id="agents-metrics"><p class="empty">Each agent's calls and response times appear here as the match runs.</p></div>
+        </div>
+
+        <form id="ask-form" class="ask">
+          <label for="question" class="sr-only">Ask the studio</label>
+          <input id="question" type="text" maxlength="300" autocomplete="off" placeholder="Ask the studio: why is it still level?">
+          <button type="submit" class="btn-primary">Ask</button>
+          <div id="suggestions" class="suggestions"></div>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

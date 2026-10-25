@@ -84,6 +84,7 @@ class TeamState:
     tactical_changes: int = 0
     shot_log: list = field(default_factory=list)       # (match_seconds, xg)
     used_players: set = field(default_factory=set)
+    came_on: set = field(default_factory=set)          # substitutes who came on: not taken off again
 
     @property
     def tactics(self) -> dict:
@@ -559,17 +560,24 @@ class MatchSimulator:
         outfield = [p for p in ts.on_pitch if ts.lineup[p.id] != "GK"]
         if not outfield:
             return False
+        # A substitute who came on is not taken off again (only an injury can force it):
+        # a large penalty keeps him out of the choice without changing the random draws.
+        fresh = lambda p: 1000 * (p.id in ts.came_on)
         if prefer_off and prefer_off in ts.on_pitch:
-            off = prefer_off
+            pass
         elif profile == "attacking":
             pool = [p for p in outfield if POSITION_GROUP[ts.lineup[p.id]] in ("DM", "FB", "CM")] or outfield
-            off = min(pool, key=lambda p: p.position_rating(ts.lineup[p.id]) + self.rng.uniform(0, 6))
+            off = min(pool, key=lambda p: p.position_rating(ts.lineup[p.id]) + self.rng.uniform(0, 6) + fresh(p))
         elif profile == "defensive":
             pool = [p for p in outfield if POSITION_GROUP[ts.lineup[p.id]] in ATTACKING_GROUPS] or outfield
-            off = min(pool, key=lambda p: p.position_rating(ts.lineup[p.id]) + self.rng.uniform(0, 6))
+            off = min(pool, key=lambda p: p.position_rating(ts.lineup[p.id]) + self.rng.uniform(0, 6) + fresh(p))
         else:
             off = max(outfield, key=lambda p: self.load[p.id].distance_m / (p.a("stamina") + 1)
-                      + (ts.yellow.get(p.id, 0) * 15) + self.rng.uniform(0, 25))
+                      + (ts.yellow.get(p.id, 0) * 15) + self.rng.uniform(0, 25) - fresh(p))
+        if prefer_off and prefer_off in ts.on_pitch:
+            off = prefer_off
+        if off.id in ts.came_on and off is not prefer_off:
+            return False
         slot = ts.lineup[off.id]
         if off.id == (ts.gk.id if ts.gk else None):
             cands = [p for p in ts.bench if p.group == "GK"]
@@ -593,6 +601,7 @@ class MatchSimulator:
         ts.lineup[on.id] = slot
         ts.subs_used += 1
         ts.used_players.add(on.id)
+        ts.came_on.add(on.id)
         if self.carrier is off:
             self.carrier = on
         self._emit("substitution", k, off, details={

@@ -63,7 +63,9 @@ class ProducerTools:
                         meaning += ", hat-trick" if n == 3 else f", his {['', '', 'second', 'third', 'fourth', 'fifth'][min(n, 5)]} goal"
                     m = {"type": "goal", "players": players, "roles": roles,
                          "description": f"{e['player']} scores ({meaning}), xG {xg:.2f}"
-                                        + (f", assisted by {d['assist_player']}" if d.get("assist_player") else ""),
+                                        + (f", assisted by {d['assist_player']}" if d.get("assist_player") else "")
+                                        + f"; score now {self.ctx.home['name']} {score['home']}-{score['away']} "
+                                          f"{self.ctx.away['name']}",
                          "score_after": f"{score['home']}-{score['away']}",
                          "importance": BASE_IMPORTANCE["goal"] + 0.15 * (meaning in ("equaliser", "go-ahead goal"))
                                        + 0.1 * (match_minute(e) >= 80) + 0.1 * (n == 3)}

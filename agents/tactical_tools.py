@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from statistics import mean
 
-from agents.match_tools import MatchContext, _normalise, minute_label
+from agents.match_tools import MatchContext, _normalise, _round, minute_label
 
 FINAL_THIRD_X = 80          # x >= 80: attacking third
 OWN_60_PCT_X = 72           # x < 72: a team's own 60% of the pitch (used for PPDA)
@@ -206,8 +206,31 @@ class TacticalTools:
             score = (h["xg"] - a["xg"]) * 4 + (h["final_third_passes"] - a["final_third_passes"]) / 10
             row["on_top"] = (self.ctx.home["name"] if score > 0.6 else
                              self.ctx.away["name"] if score < -0.6 else "even")
+            row["goal_difference_swing"] = h["goals"] - a["goals"]
             windows.append(row)
-        return {"windows": windows}
+        return {"windows": windows, "decisive_window": self._decisive(windows)}
+
+    def _decisive(self, windows: list[dict]) -> dict | None:
+        """The window that decided the match, computed here and not by the model:
+        the one with the biggest goal swing, then the biggest xG gap. Territory alone,
+        without goals or a clear xG gap, is pressure, not a turning point."""
+        home, away = self.ctx.home["name"], self.ctx.away["name"]
+        if not windows:
+            return None
+
+        def weight(w):
+            return (abs(w["goal_difference_swing"]), abs(w[home]["xg"] - w[away]["xg"]))
+        best = max(windows, key=weight)
+        if best[home]["goals"] + best[away]["goals"] == 0 and abs(best[home]["xg"] - best[away]["xg"]) < 0.5:
+            return {"minutes": None, "reason": "No window stands out yet: no goal swing and no clear xG gap."}
+        scored = best[home]["goals"] + best[away]["goals"] > 0
+        return {"minutes": best["minutes"],
+                "goals": {home: best[home]["goals"], away: best[away]["goals"]},
+                "xg": {home: best[home]["xg"], away: best[away]["xg"]},
+                "kind": "turning point" if scored else "strongest spell (no goal)",
+                "reason": ("Biggest goal swing, then biggest xG gap, of all windows." if scored else
+                           "No goal in it: the best spell of chances, not a turning point. Nothing "
+                           "was decided in it; say who created the better chances.")}
 
     def get_attacking_patterns(self, team: str, from_minute: int, to_minute: int) -> dict:
         """How a team attacks: channels, crosses, through balls, counters, chance types, creators."""
@@ -292,13 +315,13 @@ class TacticalTools:
                                                  ("through ball", k.get("through_ball"))) if flag),
                         k.get("pass_type", "pass").replace("_", " "))
             key_pass = {"by": kp["player"], "player_position": kp["position"], "kind": kind,
-                        "height": k.get("height"), "length_m": k.get("length"),
+                        "height": k.get("height"), "length_m": _round(k.get("length"), 1),
                         "played_from_channel": _channel(kp["location"][1]),
                         "played_from_distance_to_goal_line_m": round(120 - kp["location"][0], 1)}
         return {
             "event_id": s["event_id"], "minute": minute_label(s), "team": s["team"],
-            "shooter": s["player"], "outcome": s["outcome"], "xg": d["xg"],
-            "shot_from": {"distance_m": d["distance"], "channel": _channel(sy),
+            "shooter": s["player"], "outcome": s["outcome"], "xg": round(d["xg"], 2),
+            "shot_from": {"distance_m": round(d["distance"], 1), "channel": _channel(sy),
                           "inside_box": sx >= BOX_X and BOX_Y[0] <= sy <= BOX_Y[1]},
             "body_part": d["body_part"], "first_time": d["first_time"],
             "under_pressure": s["under_pressure"],
@@ -306,7 +329,7 @@ class TacticalTools:
             "key_pass": key_pass,
             "counter_attack": d["counter_attack"],
             "defenders_in_shooting_cone": d["n_defenders_in_cone"],
-            "nearest_defender_m": d["nearest_defender_dist"],
+            "nearest_defender_m": _round(d["nearest_defender_dist"], 1),
             "defenders_goal_side_of_ball": sum(p["location"][0] > sx for p in opponents),
             "defenders_in_box": sum(in_box(p) for p in opponents),
             "attacking_teammates_in_box": sum(in_box(p) for p in mates),

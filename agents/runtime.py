@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 
 from azure.ai.projects import AIProjectClient
 from azure.ai.projects.models import (FunctionTool, PromptAgentDefinition,
@@ -18,11 +20,49 @@ from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
 
 
+class CachedCredential:
+    """One sign-in token shared by every agent and every thread.
+
+    DefaultAzureCredential gets its token from the Azure CLI (az). When several agents
+    start at the same moment (three show plans in parallel at half-time), each one would
+    launch `az` at once, and on Windows those parallel launches fail. Here the token is
+    fetched once, under a lock, and reused until five minutes before it expires.
+    """
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.lock = threading.Lock()
+        self.cache = {}            # (method, scopes) -> token
+
+    def _cached(self, method: str, scopes: tuple, fetch):
+        with self.lock:
+            token = self.cache.get((method, scopes))
+            if token is None or token.expires_on - time.time() < 300:
+                token = fetch()
+                self.cache[(method, scopes)] = token
+            return token
+
+    def get_token(self, *scopes, **kwargs):
+        return self._cached("token", scopes, lambda: self.inner.get_token(*scopes, **kwargs))
+
+    def get_token_info(self, *scopes, options=None):
+        return self._cached("info", scopes, lambda: self.inner.get_token_info(*scopes, options=options))
+
+    def close(self):
+        self.inner.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.close()
+
+
 def connect() -> AIProjectClient:
     """Open a client on the Foundry project defined in .env."""
     load_dotenv()
     return AIProjectClient(endpoint=os.environ["FOUNDRY_PROJECT_ENDPOINT"],
-                           credential=DefaultAzureCredential())
+                           credential=CachedCredential(DefaultAzureCredential()))
 
 
 def create_agent(project: AIProjectClient, name: str, instructions: str, schemas: list[dict],
@@ -60,9 +100,14 @@ class Agent:
 
     def __init__(self, project: AIProjectClient, name: str, instructions: str,
                  toolbox, schemas: list[dict], verbose: bool = True,
-                 reasoning_effort: str | None = None, output_schema: dict | None = None):
+                 reasoning_effort: str | None = None, output_schema: dict | None = None,
+                 checker=None):
         self.definition = create_agent(project, name, instructions, schemas,
                                        reasoning_effort, output_schema)
+        # checker(answer) -> list of broken rules (see agents/lint.py). When it finds any,
+        # the agent gets its answer back and writes it once more.
+        self.checker = checker
+        self.rewrites = 0
         self.openai = project.get_openai_client(agent_name=self.definition.name)
         self.toolbox = toolbox
         self.allowed = {s["name"] for s in schemas}
@@ -87,6 +132,26 @@ class Agent:
             return {"error": f"{type(exc).__name__}: {exc}"}
 
     def ask(self, question: str, max_rounds: int = 10) -> str:
+        """Ask, then check the answer against the rules Python can verify; if it breaks
+        some, send it back once with the list of problems."""
+        answer = self._ask_once(question, max_rounds)
+        if not self.checker:
+            return answer
+        problems = self.checker(answer)
+        if not problems:
+            return answer
+        self.rewrites += 1
+        if self.verbose:
+            print(f"  [check] {self.definition.name}: " + " | ".join(problems))
+        retry = (f"{question}\n\nYOUR DRAFT ANSWER:\n{answer}\n\nThe draft breaks these rules:\n- "
+                 + "\n- ".join(problems)
+                 + "\nWrite the answer again in the same format, fixing only these points. "
+                   "Keep every fact that was right.")
+        second = self._ask_once(retry, max_rounds)
+        # keep the rewrite only if it is not worse than the draft
+        return second if len(self.checker(second)) <= len(problems) else answer
+
+    def _ask_once(self, question: str, max_rounds: int = 10) -> str:
         """Send a question and answer the tool calls until the model returns text."""
         self.trace = []
         response = self.openai.responses.create(input=question)

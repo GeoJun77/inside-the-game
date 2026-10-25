@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from agents import crowd, voice
+from agents import lint
 from agents.match_tools import TOOL_SCHEMAS, MatchContext, match_minute, minute_label
 from agents.narrator_feed import describe, is_key_moment
 from agents.runtime import Agent, connect
@@ -57,8 +58,17 @@ last lines.
 - Never state a player's position or role: the feed does not give it.
 - Describe what happened, never what will happen or what a team intends: no "they will
   probe the wide channels", "the booking will make him cautious", "they will want to press".
-- Say "on the counter", "on the break" or "in transition" only when the feed says
+  This holds in every variant, the favourite-club one included: no "expect them to...",
+  "they will hope...", "looks set for...", "will try to...". End on what just happened.
+- Say "on the counter", "on the break", "break" or "in transition" only when the feed says
   "on the counter".
+- Never invent movement: no "cuts in", "races clear", "skips past", "bursts forward",
+  "ghosts in" unless the feed says it. "Beats a player" only when the feed has a dribble.
+- Judge a chance by its xG, never by hope: "a clear chance", "a big opening" or "a good
+  chance" only when the feed says "big chance" or the xG is 0.30 or more. Below 0.10 it is
+  a long-range or speculative effort, even for the viewer's club.
+- Write every score home team first, as in the feed ("Harbourne Rovers 1-3 Kestrel Vale"),
+  never flipped to the scoring side ("Kestrel lead 3-1").
 - Call a player a substitute only if the feed shows him coming on.
 - Attribute every action to the player the feed names for it; when several players
   appear, check each name again before writing.
@@ -168,12 +178,14 @@ class Narrator:
                  audio_format: str = "mp3"):
         self.ctx = ctx
         self.agent = Agent(project, NAME, INSTRUCTIONS, toolbox=ctx, schemas=TOOL_SCHEMAS,
-                           verbose=verbose, reasoning_effort="low", output_schema=OUTPUT_SCHEMA)
+                           verbose=verbose, reasoning_effort="low", output_schema=OUTPUT_SCHEMA,
+                           checker=lambda raw: lint.narrator(raw, ctx))
         # Same voice and rules, but the recap is written once, after the match: it can
         # take time to think, which keeps scores and the order of goals right.
         self.recap_agent = Agent(project, NAME + "-recap", INSTRUCTIONS, toolbox=ctx,
                                  schemas=TOOL_SCHEMAS, verbose=verbose,
-                                 reasoning_effort="medium", output_schema=OUTPUT_SCHEMA)
+                                 reasoning_effort="medium", output_schema=OUTPUT_SCHEMA,
+                                 checker=lambda raw: lint.narrator(raw, ctx))
         self.teams = {"home": ctx.home["name"], "away": ctx.away["name"]}
         self.history: list[dict] = []                          # events already commented
         self.last_lines: dict[ViewerSettings, list[str]] = {}  # per audience

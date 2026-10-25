@@ -29,6 +29,8 @@ from matchsim import build_league, get_team, simulate_match
 
 NAME = "producer"
 
+MAX_HIGHLIGHTS = 8
+
 OVERLAYS = ["match_stats", "score_bug", "xg_timeline", "momentum_bar", "shot_map",
             "player_card", "stat_comparison", "tactical_card", "lineups"]
 
@@ -52,7 +54,8 @@ The plan:
 - highlights: 3 to 6 moments, in match order, using moment_id values returned by
   get_key_moments only. Always include the goals that decided the result, even when they
   hurt the viewer's club: honesty first, then personal relevance. The opener, any
-  equaliser and any go-ahead goal are always in the reel.
+  equaliser and any go-ahead goal are always in the reel. At FULL_TIME and HIGHLIGHTS every
+  goal of the match is in the reel (up to 8 highlights): a goal matters to both sides.
   For each highlight:
     * title: a short, natural TV caption of 3 to 7 words ("Thibault opens the scoring",
       "Ashworth's header hits the post"), not a copy of the tool's description.
@@ -81,6 +84,9 @@ The plan:
   48', when did Kestrel take control?"), so the specialist finds what really happened. When a question
   is about a specific moment, give its minute AND its moment_id (for a shot it is the shot's
   event id), e.g. "Why was Ashworth's shot at 29' (event 512) worth 0.43 xG?".
+- Scores: always home team first, exactly as in the descriptions ("Cardoso makes it 0-2"
+  when the away side scores), never flipped to the scoring side. Minutes are written "at 11'"
+  or "in the 11th minute", never "in the 11'".
 - alert: one sentence if something specifically matters to this viewer (their player
   scored, was booked or came off; their club conceded or took the lead), else null.
 
@@ -161,14 +167,22 @@ class Producer:
                 for h in plan["highlights"] if h["moment_id"] in real]
         plan["dropped_highlights"] = [h["moment_id"] for h in plan["highlights"] if h["moment_id"] not in real]
         # Guardrail: the goals that changed the course of the match are always shown.
+        # At full time every goal is in the reel.
         picked = {h["moment_id"] for h in kept}
+        every_goal = moment in ("FULL_TIME", "HIGHLIGHTS")
         for m in real.values():
-            decisive = m["type"] == "goal" and any(w in m["description"] for w in
-                                                   ("opener", "equaliser", "go-ahead goal"))
+            decisive = m["type"] == "goal" and (every_goal or any(
+                w in m["description"] for w in ("opener", "equaliser", "go-ahead goal")))
             if decisive and m["moment_id"] not in picked:
                 kept.append({"moment_id": m["moment_id"], "title": m["description"].split(" (")[0],
-                             "why_for_you": "A goal that changed the course of the match.",
+                             "why_for_you": ("A goal that changed the course of the match." if not every_goal
+                                             else "Every goal of the match is in your reel."),
                              "minute": m["minute"], "type": m["type"], "added_by_guardrail": True})
+        # Keep the reel watchable: goals first, then the other moments, 8 at most.
+        if len(kept) > MAX_HIGHLIGHTS:
+            goals = [h for h in kept if h["type"] == "goal"]
+            others = [h for h in kept if h["type"] != "goal"]
+            kept = goals[:MAX_HIGHLIGHTS] + others[:max(0, MAX_HIGHLIGHTS - len(goals))]
         plan["highlights"] = sorted(kept, key=lambda h: h["moment_id"])
         plan["agent_requests"] = plan["agent_requests"][:2]
         # The stats panel is filled by Python from the events, never by the model.
