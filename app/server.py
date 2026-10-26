@@ -109,7 +109,7 @@ class SessionRequest(BaseModel):
     home: str = "HAR"
     away: str = "KES"
     seed: int = 7
-    speed: float = 15.0
+    speed: float = 1.0
 
 
 @app.post("/api/session")

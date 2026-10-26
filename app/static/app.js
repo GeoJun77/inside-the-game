@@ -18,6 +18,7 @@ const state = {
   period: 1, actor: null, shotLine: null, seenItems: new Set(), lastPlan: null,
   colors: { home: ["#1f4e9c", "#ffffff"], away: ["#2f7d4f", "#ffffff"] },
   sound: { voice: true, crowd: true },
+  voiceFreeAt: 0,         // when the commentator has finished his current line
 };
 
 /* ======================================================= setup ===== */
@@ -155,26 +156,31 @@ function toAbs(side, x, y) {
   return right ? [x, y] : [120 - x, 80 - y];
 }
 
-function onPitch(ev) {
+function onPitch(ev, gap = 0.6) {
   state.period = ev.period || state.period;
   if (ev.minute) $("#clock").textContent = `${ev.minute}'`;
   if (ev.score) setScore(ev.score);
   if (ev.type === "period_start") $("#phase").textContent = ev.period === 2 ? "Second half" : "First half";
   const t = performance.now();
+  const travel = Math.max(0.15, gap) * 1000;      // the ball arrives before the next action
   if (ev.loc) {
     const b = state.ball;
-    b.fx = b.x; b.fy = b.y;
     const [ex, ey] = ev.end || ev.loc;
-    b.tx = ex; b.ty = ey;
-    if (!ev.end) { b.fx = ev.loc[0]; b.fy = ev.loc[1]; }
-    b.t0 = t; b.dur = ev.type === "pass" || ev.type === "shot" ? 450 : 300;
+    const from = ev.end ? [b.x, b.y] : ev.loc;
+    if (ev.end && Math.hypot(b.x - ev.loc[0], b.y - ev.loc[1]) > 6) { from[0] = ev.loc[0]; from[1] = ev.loc[1]; }
+    const len = Math.hypot(ex - from[0], ey - from[1]);
+    Object.assign(b, { fx: from[0], fy: from[1], tx: ex, ty: ey, t0: t,
+                       dur: Math.min(travel * 0.85, Math.max(220, len * (ev.type === "shot" ? 9 : 22))) });
+    if (["pass", "shot", "clearance"].includes(ev.type) && len > 4) state.trail = { from, to: [ex, ey], t0: t, dur: b.dur + 500 };
   }
   if (ev.player_id && state.players[ev.player_id] && ev.loc) {
-    state.actor = { id: ev.player_id, until: t + 1200, x: ev.loc[0], y: ev.loc[1] };
+    const follow = ev.type === "carry" || ev.type === "dribble";    // he runs with the ball
+    state.actor = { id: ev.player_id, until: t + (follow ? travel + 200 : 900), x: ev.loc[0], y: ev.loc[1], follow };
   }
   if (ev.type === "pass" && ev.recipient_id && state.players[ev.recipient_id] && ev.end) {
-    state.receiver = { id: ev.recipient_id, until: t + 1200, x: ev.end[0], y: ev.end[1] };
+    state.receiver = { id: ev.recipient_id, until: t + travel + 600, x: ev.end[0], y: ev.end[1] };
   }
+  if (ev.type === "pass" && ev.outcome === "offside" && ev.end) showOffside(ev, t, travel + 2600);
   if (["pass", "carry", "dribble", "shot", "kick_off"].includes(ev.type) && ev.team_id) state.possession = sideOf(ev.team_id);
   if (ev.type === "pressure" && ev.player_id && state.players[ev.player_id] && ev.loc) {
     state.presser = { id: ev.player_id, until: t + 1500, x: ev.loc[0], y: ev.loc[1] };
@@ -261,6 +267,38 @@ function teamOf(id) {
   return p ? state.init[p.side].team.name : "";
 }
 
+/* Offside, as in the Laws of the Game: when the ball is played, the receiver is in the
+ * opponents' half and nearer to their goal line than the second-last opponent (the
+ * goalkeeper being the last). The scene is set a moment before the pass: the defending
+ * team's outfield players step up into one line, the second-last defender on it; the
+ * receiver is beyond it, his team-mates stay level or behind. */
+function showOffside(ev, t, ms) {
+  const side = sideOf(ev.team_id), other = side === "home" ? "away" : "home";
+  const [rx, ry] = toAbsFor(side, ev.end);                 // receiver, in the attackers' frame
+  const lineX = Math.min(Math.max(61, rx - 2.2), 112);     // always in the opponents' half
+  const receiverX = Math.max(rx, lineX + 1.8);
+  let marker = null, best = Infinity;
+  for (const [id, q] of Object.entries(state.players)) {
+    if (!q.onPitch || q.side !== other || q.slot === "GK") continue;
+    const [, qy] = toAbsFor(side, [q.x, q.y]);
+    if (Math.abs(qy - ry) < best) { best = Math.abs(qy - ry); marker = id; }
+  }
+  state.offside = { side, lineX, x: toAbs(side, lineX, 40)[0], until: t + ms,
+                    receiver: ev.recipient_id, receiverAt: toAbs(side, receiverX, ry), marker };
+}
+/* Where the offside scene puts a player (abs coordinates), or null to leave him be. */
+function offsideSpot(id, p, tx, ty) {
+  const o = state.offside;
+  if (id === o.receiver) return o.receiverAt;
+  const [fx, fy] = toAbsFor(o.side, [tx, ty]);             // attackers' frame
+  if (p.side !== o.side) {
+    if (p.slot === "GK") return fx > o.lineX + 4 ? null : toAbs(o.side, Math.max(o.lineX + 6, 114), fy);
+    if (id === o.marker) return toAbs(o.side, o.lineX, fy);            // the second-last defender
+    return fx > o.lineX - 0.6 ? toAbs(o.side, o.lineX - 0.6 - Math.abs(Math.sin(p.phase)) * 2.5, fy) : null;
+  }
+  return fx > o.lineX - 1.2 ? toAbs(o.side, o.lineX - 1.2 - Math.abs(Math.cos(p.phase)) * 3, fy) : null;
+}
+
 let chipTimer = null;
 function showChip(text, kind, ms, title) {
   const el = $("#chip");
@@ -326,6 +364,8 @@ function draw(now) {
     if (gk) { fx += (bxT - 60) * 0.06; fy += (byT - 40) * 0.12; }
     else {
       fx += (bxT - 60) * 0.45 + (attacking ? 7 : -5);    // the block follows the ball; push up with it
+      if (attacking && bxT > 80 && p.base[0] > 70) { fx += 6; fy += (p.base[1] - 40) * 0.25; }   // runs into the box
+      if (!attacking && bxT > 80) fx = Math.min(fx, 34);   // the back line drops to protect the goal
       fy += (byT - 40) * 0.22;
       if (!attacking) fy = fy * 0.8 + byT * 0.2;          // without the ball: squeeze towards it
       fx += Math.sin(now / 900 * p.f + p.phase) * 1.4;     // nobody stands still
@@ -336,8 +376,12 @@ function draw(now) {
     const sp = state.setPiece;
     if (sp && now < sp.until && !gk) { const spot = setPieceSpot(p, sp, id); if (spot) [tx, ty] = spot; }
     for (const special of [state.actor, state.receiver, state.presser]) {
-      if (special && special.id === id && now < special.until) { tx = special.x; ty = special.y; }
+      if (special && special.id === id && now < special.until) {
+        if (special.follow) { tx = b.x; ty = b.y + 1.2; }       // the ball at his feet
+        else { tx = special.x; ty = special.y; }
+      }
     }
+    if (state.offside && now < state.offside.until) { const spot = offsideSpot(id, p, tx, ty); if (spot) [tx, ty] = spot; }
     const cel = state.celebration;
     if (cel && cel.at) {                       // after a goal: the scorers run to celebrate
       if (p.side === cel.side && !gk) {
@@ -348,7 +392,8 @@ function draw(now) {
         [tx, ty] = toAbs(p.side, p.base[0], p.base[1]);
       }
     }
-    const pace = state.celebration ? 0.035 : sp && now < sp.until ? 0.05 : 0.08;
+    const carrying = state.actor && state.actor.follow && state.actor.id === id && now < state.actor.until;
+    const pace = carrying ? 0.25 : state.celebration ? 0.035 : sp && now < sp.until ? 0.05 : 0.08;
     p.x += (tx - p.x) * pace; p.y += (ty - p.y) * pace;
     const [fill, text] = state.colors[p.side];
     c.beginPath(); c.arc(sx(p.x), sy(p.y), 15, 0, Math.PI * 2);
@@ -360,6 +405,25 @@ function draw(now) {
       c.fillStyle = "#F1F4EC"; c.font = "600 17px Barlow Condensed, sans-serif";
       c.fillText(p.short, sx(p.x), sy(p.y) - 26);
     }
+  }
+  // ball trail: where the pass or the shot came from
+  const tr = state.trail;
+  if (tr && now < tr.t0 + tr.dur) {
+    const k2 = Math.min(1, (now - tr.t0) / Math.max(1, b.dur));
+    const alpha = Math.max(0, 1 - (now - tr.t0) / tr.dur) * 0.55;
+    c.strokeStyle = `rgba(241, 244, 236, ${alpha})`; c.lineWidth = 3; c.lineCap = "round";
+    c.beginPath(); c.moveTo(sx(tr.from[0]), sy(tr.from[1]));
+    c.lineTo(sx(tr.from[0] + (tr.to[0] - tr.from[0]) * k2), sy(tr.from[1] + (tr.to[1] - tr.from[1]) * k2)); c.stroke();
+  }
+  // offside line through the last defender
+  const off = state.offside;
+  if (off && now < off.until) {
+    c.strokeStyle = "rgba(244, 211, 94, 0.95)"; c.lineWidth = 3; c.setLineDash([14, 10]);
+    c.beginPath(); c.moveTo(sx(off.x), sy(0)); c.lineTo(sx(off.x), sy(80)); c.stroke(); c.setLineDash([]);
+    c.fillStyle = "#F4D35E"; c.font = "700 20px Barlow Condensed, sans-serif"; c.textAlign = "center";
+    c.fillText("OFFSIDE LINE", sx(off.x), sy(0) + 22);
+    const r = state.players[off.receiver];
+    if (r) { c.strokeStyle = "#E4572E"; c.lineWidth = 4; c.beginPath(); c.arc(sx(r.x), sy(r.y), 22, 0, Math.PI * 2); c.stroke(); }
   }
   // shot line and xG
   const s = state.shotLine;
@@ -540,6 +604,30 @@ $("#toggle-crowd").addEventListener("click", () => {
  *     on the goal itself, then the players celebrate while the call goes on (no frozen picture);
  *   - the live stats refresh after every shot, goal and card;
  *   - half-time and full time open the studio. */
+/* Match pace, like the match view of a football manager game: build-up play in midfield
+ * runs quickly, the game slows right down when it gets dangerous (final third, crosses,
+ * through balls, set pieces, shots, fouls, offsides), and stoppages are skipped over.
+ * The speed chosen at set-up scales everything (Relaxed, Broadcast, Quick). */
+const DANGER_TYPES = new Set(["shot", "goal", "foul", "card", "offside", "substitution"]);
+const DANGER_PASSES = new Set(["cross", "through_ball", "corner", "free_kick"]);
+function frameX(ev) {                    // x in the acting team's attacking frame
+  if (!ev.loc || !ev.team_id) return 60;
+  const right = (sideOf(ev.team_id) === "home") === (ev.period !== 2);
+  return right ? ev.loc[0] : 120 - ev.loc[0];
+}
+function paceGap(prev, ev) {
+  const scale = 1 / (state.speed || 1);
+  if (ev.type === "pressure") return 0.06 * scale;
+  if (prev.period !== ev.period) return 1.0 * scale;
+  const d = Math.max(0, ev.ms - prev.ms);
+  if (d > 20) return Math.min(2.5, 0.7 + (d - 20) / 40) * scale;          // a stoppage: skip it
+  const danger = DANGER_TYPES.has(ev.type) || DANGER_PASSES.has(ev.pass_type) || ev.outcome === "offside" || frameX(ev) > 80;
+  let g = Math.max(0.22, d / (danger ? 4.8 : 14));
+  if (prev.outcome === "offside") g += 1.4;                               // time to see the offside line
+  if (ev.outcome === "offside") g = Math.max(g, 1.1);                     // and to set the scene before it
+  return g * scale;
+}
+
 const NOTABLE = new Set(["shot", "card", "substitution", "tactical_change", "injury", "offside", "period_end", "match_end"]);
 const player = (() => {
   const buffer = [], held = [];
@@ -596,10 +684,12 @@ const player = (() => {
     seg = buffer.shift();
     const v = seg.voice ? await seg.voice : null;
     const S = v ? v.duration : 0;
-    const evs = seg.events, speed = state.speed || 15;
-    const ms0 = evs.length ? evs[0].ms : 0;
-    const at = (ev) => Math.max(0, (ev.ms - ms0) / speed);
-    let D = evs.length ? at(evs[evs.length - 1]) : 0;
+    const evs = seg.events;
+    const times = new Map();
+    let clock = 0;
+    evs.forEach((ev, i) => { if (i) clock += paceGap(evs[i - 1], ev); times.set(ev, clock); });
+    const at = (ev) => times.get(ev) ?? clock;
+    let D = clock;
     const goalEv = seg.goal_idx != null ? evs.find((e) => e.idx === seg.goal_idx) : null;
     let voiceAt, celebrate = 0;
     if (goalEv) {                       // "GOAL!" on the goal itself, then the celebration
@@ -607,11 +697,21 @@ const player = (() => {
       celebrate = Math.max(S, 3.5) + 0.8;
       D = voiceAt + celebrate;
     } else {                            // the line starts on the moment it is about
+      // the line starts on the moment it is about, once the previous line has finished;
+      // play goes on under it (it may run into the next segment)
       const notable = [...evs].reverse().find((e) => NOTABLE.has(e.type));
       voiceAt = notable ? at(notable) + 0.4 : Math.max(0, D - S - 0.4);
-      D = Math.max(D, voiceAt + S + 0.4, 1.2);
+      voiceAt = Math.max(voiceAt, (state.voiceFreeAt - performance.now()) / 1000 || 0);
+      D = Math.max(D, voiceAt + 0.6, 1.2);
     }
-    const tasks = evs.map((ev) => ({ t: at(ev), run: () => onPitch(ev) }));
+    state.voiceFreeAt = performance.now() + (voiceAt + S + 0.3) * 1000;
+    const tasks = evs.map((ev, i) => ({ t: at(ev), run: () => onPitch(ev, i + 1 < evs.length ? at(evs[i + 1]) - at(ev) : 0.6) }));
+    // offside: the back line steps up a moment before the pass, so the scene reads clearly
+    for (const ev of evs) {
+      if (ev.type === "pass" && ev.outcome === "offside" && ev.end) {
+        tasks.push({ t: Math.max(0, at(ev) - 1.0), run: () => showOffside(ev, performance.now(), 1300) });
+      }
+    }
     // set pieces: the players take up their places just before the kick
     for (const ev of evs) {
       const kind = ev.type === "pass" && ev.pass_type === "corner" ? "corner"

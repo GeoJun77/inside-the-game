@@ -89,12 +89,12 @@ def segments_of(events: list[dict]):
 
 
 class LiveSession:
-    def __init__(self, project, home: str, away: str, seed: int = 7, speed: float = 15.0):
+    def __init__(self, project, home: str, away: str, seed: int = 7, speed: float = 1.0):
         self.id = uuid.uuid4().hex[:8]
         league = build_league()
         self.events = simulate_match(get_team(league, home), get_team(league, away), seed=seed)
         self.start_info = self.events[0]["details"]
-        self.speed = max(1.0, float(speed))
+        self.speed = min(3.0, max(0.3, float(speed)))   # pace: 1 = broadcast
         self.orch = Orchestrator(project, self.events, viewers={}, commentary_window=None, echo=False)
         self.orch.listeners.append(self._on_item)
         self.orch.background = ThreadPoolExecutor(max_workers=2)
