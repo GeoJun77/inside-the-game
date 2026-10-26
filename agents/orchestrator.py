@@ -181,6 +181,11 @@ class Orchestrator:
         self._lock = threading.Lock()
         # Live mode: slow analyses run on this pool so they never hold up the commentary.
         self.background: ThreadPoolExecutor | None = None
+        # Live mode: the web app runs the half-time studio itself, right after the
+        # half-time segment has been sent, and shares this lock on the match context.
+        self.defer_half_time = False
+        self.half_time_due = False
+        self.ctx_lock = threading.RLock()
 
         self.stats = stats_agent.build(project, self.ctx, verbose=False)
         self.tactical = tactical_agent.build(project, self.ctx, verbose=False)
@@ -297,7 +302,10 @@ class Orchestrator:
             if e["type"] == "tactical_change":
                 self.reviews.append((match_minute(e) + 12, e))
             elif e["type"] == "period_end" and e["details"].get("period") == 1:
-                self.half_time()
+                if self.defer_half_time:
+                    self.half_time_due = True
+                else:
+                    self.half_time()
         self._review_tactical_changes(minute)
         self._stats_panel(minute)
 
@@ -322,8 +330,9 @@ class Orchestrator:
     def _review_one(self, e: dict, minute: int) -> None:
         q = (f"{e['team']} made a tactical change at {minute_label(e)}' "
              f"({e['details']['description']}). Has it worked so far?")
-        label = self.minute
-        text, ok = self._ask("tactical", q)
+        with self.ctx_lock:                   # never while a viewer question rewinds the context
+            label = self.minute
+            text, ok = self._ask("tactical", q)
         if ok:
             self.memory.add(label, "tactical analyst", text)
         self.publish(BroadcastItem(label, "analysis", "tactical", "all",

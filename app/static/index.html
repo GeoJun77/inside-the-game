@@ -96,7 +96,12 @@
       <section class="pitch-area" aria-label="Live pitch">
         <div class="pitch-wrap">
           <canvas id="pitch" width="1240" height="840" aria-label="Animated pitch showing the ball and the players"></canvas>
+          <div id="chip" class="chip" hidden aria-live="polite"></div>
           <div id="moment" class="moment" hidden></div>
+          <div id="prematch" class="prematch" hidden></div>
+        </div>
+        <div id="live-strip" class="live-strip" aria-label="Live match stats">
+          <div class="ls-pos"><span>50%</span><div class="ls-bar"><i style="width:50%"></i></div><span>50%</span><small>Possession</small></div>
         </div>
         <p id="ticker" class="ticker" aria-live="off"></p>
 

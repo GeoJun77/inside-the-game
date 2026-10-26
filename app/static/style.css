@@ -147,6 +147,69 @@ input[type="radio"], input[type="checkbox"] { accent-color: var(--flood); width:
   .moment:not([hidden]) { animation: moment-in 0.5s cubic-bezier(.2,.9,.3,1.2); }
   @keyframes moment-in { from { opacity: 0; transform: scale(1.08); } to { opacity: 1; transform: none; } }
 }
+/* set-piece, foul, card and substitution banner, top left of the pitch */
+.chip {
+  position: absolute; left: 16px; top: 16px; max-width: min(70%, 520px);
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 10px 14px 10px 16px; border-radius: var(--radius-s);
+  background: rgba(13, 42, 30, 0.88); border-left: 4px solid var(--chalk);
+  font: 600 20px/1.2 var(--display);
+}
+.chip b { font: 700 14px/1.2 var(--body); letter-spacing: 0.02em; color: var(--sage); }
+.chip.penalty { border-left-color: var(--flood); }
+.chip.penalty span { color: var(--flood); font-size: 26px; }
+.chip.card { padding-left: 50px; }
+.chip.card::before { content: ""; position: absolute; left: 16px; top: 50%; width: 22px; height: 30px;
+  margin-top: -15px; border-radius: 3px; transform: rotate(-8deg); }
+.chip.card.yellow::before { background: #F4D35E; }
+.chip.card.red::before { background: var(--card); }
+.chip.sub { border-left-color: #6FCF97; }
+@media (prefers-reduced-motion: no-preference) {
+  .chip:not([hidden]) { animation: chip-in 0.25s ease-out; }
+  @keyframes chip-in { from { transform: translateX(-12px); opacity: 0; } to { transform: none; opacity: 1; } }
+}
+
+/* pre-match: line-ups over the pitch */
+.prematch {
+  position: absolute; inset: 0; overflow: auto;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  padding: 24px; text-align: center;
+  background: rgba(13, 42, 30, 0.9); border-radius: var(--radius-m);
+}
+.pm-venue { color: var(--sage); font: 600 16px/1.2 var(--body); }
+.pm-teams { font: 800 clamp(26px, 4vw, 46px)/1 var(--display); display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; justify-content: center; }
+.pm-teams em { font-style: normal; color: var(--sage); font-size: 0.6em; }
+.pm-meta { color: var(--sage); font-size: 14px; }
+.pm-lineups { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; text-align: left; margin-top: 6px; }
+.pm-lineups h4 { margin: 0 0 6px; font: 700 18px/1 var(--display); display: flex; align-items: center; gap: 8px; }
+.pm-lineups h4 i { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--chalk); }
+.pm-lineups ol { list-style: none; margin: 0; padding: 0; columns: 1; font-size: 14px; line-height: 1.55; }
+.pm-lineups b { display: inline-block; width: 24px; color: var(--sage); font-weight: 600; }
+.pm-intro { max-width: 60ch; margin: 6px 0 0; font-size: 15px; }
+.pm-status { margin: 0; color: var(--flood); font: 600 18px/1.2 var(--display); }
+
+/* live stats under the pitch */
+.live-strip {
+  display: grid; grid-template-columns: 2fr repeat(4, 1fr); gap: 8px; margin: 10px 0 6px;
+}
+.live-strip > div { background: var(--turf); border-radius: var(--radius-s); padding: 8px 10px; }
+.ls-pos { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; font: 700 18px/1 var(--display); }
+.ls-pos small { grid-column: 1 / -1; text-align: center; color: var(--sage); font: 500 12px/1 var(--body); }
+.ls-cell small { text-align: center; color: var(--sage); font: 500 12px/1.2 var(--body); align-self: center; }
+.ls-bar { height: 8px; border-radius: 4px; background: var(--away); overflow: hidden; border: 1px solid var(--line); }
+.ls-bar i { display: block; height: 100%; background: var(--home); transition: width 0.6s ease; }
+.ls-cell { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 6px; font: 700 18px/1.1 var(--display); }
+
+/* match events in the live feed: goals, cards, penalties, substitutions */
+.feed li.event p { margin: 0; font-size: 15px; color: var(--chalk); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.feed li.event.goal-line p { font: 600 19px/1.2 var(--display); color: var(--flood); }
+.ev-card { width: 12px; height: 16px; border-radius: 2px; display: inline-block; flex: none; }
+.ev-card.yellow { background: #F4D35E; }
+.ev-card.red { background: var(--card); }
+.ev-goal { width: 14px; height: 14px; border-radius: 50%; background: var(--chalk); box-shadow: inset 0 0 0 3px var(--night); display: inline-block; flex: none; }
+.ev-sub, .ev-pen { font: 700 13px/1 var(--body); color: var(--night); background: #6FCF97; border-radius: 3px; padding: 2px 5px; }
+.ev-pen { background: var(--flood); }
+
 .ticker { margin: 0; color: var(--sage); min-height: 1.5em; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .agents { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
@@ -243,6 +306,10 @@ input[type="radio"], input[type="checkbox"] { accent-color: var(--flood); width:
   .agents { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 640px) {
+  .live-strip { grid-template-columns: 1fr 1fr; }
+  .live-strip .ls-pos { grid-column: 1 / -1; }
+  .pm-lineups { grid-template-columns: 1fr; gap: 12px; }
+  .chip { font-size: 16px; left: 8px; top: 8px; }
   .scoreboard { grid-template-columns: 1fr auto 1fr; padding: 10px 16px; gap: 10px; }
   .clock { grid-column: 1 / -1; justify-items: center; grid-template-columns: auto auto; gap: 10px; align-items: baseline; }
   .sound-toggles { grid-column: 1 / -1; justify-content: center; }

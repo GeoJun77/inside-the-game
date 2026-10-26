@@ -8,9 +8,10 @@ Endpoints:
     POST /api/session           create a match session (home, away, seed, speed)
     POST /api/join              a viewer joins with a profile -> viewer id + match info
     POST /api/kickoff           start the match
-    GET  /api/stream?viewer=..  live stream (Server-Sent Events): pitch events, items on air
+    GET  /api/stream?viewer=..  live stream (Server-Sent Events): ready segments, items on air
     POST /api/ask               a viewer question, routed to the right agent(s)
-    GET  /api/audio/{item_id}   the commentator's voice for a commentary item (MP3)
+    POST /api/progress          how far the browser has played (the director stays just ahead)
+    GET  /api/audio/{key}       the commentator's voice for an item, or "intro-<viewer>" (MP3)
     GET  /api/crowd/{name}      stadium sound samples (WAV)
     GET  /api/metrics           calls, failures and latency per agent
 """
@@ -184,9 +185,22 @@ def ask(req: AskRequest):
     return {"items": s.ask(req.viewer, req.question.strip()[:400])}
 
 
-@app.get("/api/audio/{item_id}")
-def audio(item_id: int):
-    data = session().audio(item_id)
+class ProgressRequest(BaseModel):
+    viewer: str
+    seq: int
+    idx: int
+
+
+@app.post("/api/progress")
+def progress(req: ProgressRequest):
+    """The browser says how far it has played: the director stays just ahead of it."""
+    session().report_progress(req.viewer, req.seq, req.idx)
+    return {"ok": True}
+
+
+@app.get("/api/audio/{key}")
+def audio(key: str):
+    data = session().audio(key)
     if not data:
         raise HTTPException(404, "No audio for this item")
     return Response(content=data, media_type="audio/mpeg", headers={"Cache-Control": "max-age=3600"})
