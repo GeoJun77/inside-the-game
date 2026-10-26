@@ -179,6 +179,8 @@ class Orchestrator:
         self.panels_done: set[int] = set()
         self.listeners: list = []                     # callbacks: the web server streams items
         self._lock = threading.Lock()
+        # Live mode: slow analyses run on this pool so they never hold up the commentary.
+        self.background: ThreadPoolExecutor | None = None
 
         self.stats = stats_agent.build(project, self.ctx, verbose=False)
         self.tactical = tactical_agent.build(project, self.ctx, verbose=False)
@@ -312,13 +314,20 @@ class Orchestrator:
         due = [r for r in self.reviews if r[0] <= minute]
         self.reviews = [r for r in self.reviews if r[0] > minute]
         for _, e in due:
-            q = (f"{e['team']} made a tactical change at {minute_label(e)}' "
-                 f"({e['details']['description']}). Has it worked so far?")
-            text, ok = self._ask("tactical", q)
-            if ok:
-                self.memory.add(self.minute, "tactical analyst", text)
-            self.publish(BroadcastItem(self.minute, "analysis", "tactical", "all",
-                                       {"text": text, "question": q}, degraded=not ok))
+            if self.background:
+                self.background.submit(self._review_one, e, minute)
+            else:
+                self._review_one(e, minute)
+
+    def _review_one(self, e: dict, minute: int) -> None:
+        q = (f"{e['team']} made a tactical change at {minute_label(e)}' "
+             f"({e['details']['description']}). Has it worked so far?")
+        label = self.minute
+        text, ok = self._ask("tactical", q)
+        if ok:
+            self.memory.add(label, "tactical analyst", text)
+        self.publish(BroadcastItem(label, "analysis", "tactical", "all",
+                                   {"text": text, "question": q}, degraded=not ok))
 
     # ---------- show segments ----------
     def _plans(self, moment: str) -> None:

@@ -90,10 +90,9 @@ $("#profile-form").addEventListener("submit", async (ev) => {
 function startBroadcast(init) {
   state.init = init;
   state.viewer = init.viewer_id;
-  state.colors.home = kitOnGrass(init.home.team.colors);
-  state.colors.away = kitOnGrass(init.away.team.colors);
-  document.documentElement.style.setProperty("--home", init.home.team.colors[0]);
-  document.documentElement.style.setProperty("--away", init.away.team.colors[0]);
+  Object.assign(state.colors, chooseKits(init.home.team.colors, init.away.team.colors));
+  document.documentElement.style.setProperty("--home", state.colors.home[0]);   // the kits worn today
+  document.documentElement.style.setProperty("--away", state.colors.away[0]);
   $("#home-name").textContent = init.home.team.name;
   $("#away-name").textContent = init.away.team.name;
   for (const side of ["home", "away"]) {
@@ -119,7 +118,10 @@ function connectStream() {
   const es = new EventSource(`/api/stream?viewer=${state.viewer}`);
   es.addEventListener("pitch", (e) => onPitch(JSON.parse(e.data)));
   es.addEventListener("item", (e) => renderItem(JSON.parse(e.data)));
-  es.addEventListener("status", (e) => { const d = JSON.parse(e.data); updateClock(d.clock, d.status); });
+  es.addEventListener("status", (e) => {
+    const d = JSON.parse(e.data); updateClock(d.clock, d.status);
+    if (d.status === "full_time") audio.endOfMatch();
+  });
   es.addEventListener("metrics", () => refreshMetrics());
 }
 
@@ -190,20 +192,33 @@ function onPitch(ev) {
     if (on) Object.assign(on, { onPitch: true, slot: ev.slot, base: state.init.positions[ev.slot] || [60, 40],
                                 x: off ? off.x : 60, y: off ? off.y : 40 });
   }
-  if (ev.type === "goal") showMoment("GOAL", `${ev.scorer} ${ev.minute}'`, "", 4000);
+  // The picture holds on a goal while the commentator calls it: the GOAL screen stays up
+  // until play resumes (at least 3 s, at most 20 s).
+  if (ev.type === "goal") { showMoment("GOAL", `${ev.scorer} ${ev.minute}'`, "", 20000); state.goalShownAt = t; }
+  else if (state.goalShownAt && t - state.goalShownAt > 3000) { $("#moment").hidden = true; state.goalShownAt = null; }
   if (ev.type === "card" && (ev.card === "red" || ev.card === "second_yellow")) showMoment("Red card", ev.player, "card", 3000);
   $("#ticker").textContent = tickerText(ev);
 }
 
-/* A green kit disappears on green grass: then the shirt uses the club's second colour. */
-function kitOnGrass([primary, secondary]) {
-  const lum = (hex) => {
-    const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255)
-      .map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
-    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
-  };
-  const contrast = (a, b) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
-  return contrast(primary, "#1E6B45") < 1.6 ? [secondary, primary] : [primary, secondary];
+// Kits, like on a real matchday: the home side wears its first colour (a white outline keeps a
+// dark kit visible on the grass). The away side changes kit when its colour is too close to the
+// grass or to the home kit: second colour first, then a neutral change kit.
+const GRASS = "#1E6B45";
+function rgb(hex) { return [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)); }
+function colourDistance(a, b) {          // "redmean" distance: close to how different colours look
+  const [r1, g1, b1] = rgb(a), [r2, g2, b2] = rgb(b), rm = (r1 + r2) / 2;
+  return Math.sqrt((2 + rm / 256) * (r1 - r2) ** 2 + 4 * (g1 - g2) ** 2 + (2 + (255 - rm) / 256) * (b1 - b2) ** 2);
+}
+function numberColour(hex) {
+  const [r, g, b] = rgb(hex).map((c) => c / 255);
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.45 ? "#10241A" : "#FFFFFF";
+}
+function chooseKits(homeColours, awayColours) {
+  const onGrass = (c) => colourDistance(c, GRASS) >= 110;
+  const home = [...homeColours, "#F5F5F5"].find(onGrass);
+  const away = [...awayColours, "#F5F5F5", "#111111", "#E4572E"]
+    .find((c) => onGrass(c) && colourDistance(c, home) >= 200);
+  return { home: [home, numberColour(home)], away: [away, numberColour(away)] };
 }
 
 function sideOf(teamId) { return teamId === state.init.home.team.id ? "home" : "away"; }
@@ -321,7 +336,7 @@ function renderItem(item, fromHistory = false) {
   let body = "";
   if (item.kind === "commentary") {
     body = `<p>${escapeHtml(p.text)}</p>`;
-    if (!fromHistory && state.sound.voice && state.init.voice) audio.speak(item.id);
+    if (!fromHistory && state.sound.voice && state.init.voice) audio.speak(item.id, p.excitement >= 4);
   } else if (item.kind === "analysis") {
     body = `<div class="who">Tactical analyst</div><p>${escapeHtml(p.text)}</p>`;
   } else if (item.kind === "answer") {
@@ -334,7 +349,7 @@ function renderItem(item, fromHistory = false) {
             ${p.alert ? `<p>${escapeHtml(p.alert)}</p>` : ""}`;
   } else if (item.kind === "recap") {
     body = `<div class="who">Match report</div><p>${escapeHtml(p.text)}</p>`;
-    if (!fromHistory && state.sound.voice && state.init.voice) audio.speak(item.id);
+    if (!fromHistory && state.sound.voice && state.init.voice) audio.speak(item.id, true);
   } else return;
   li.innerHTML = `<span class="min">${item.minute === "FT" ? "FT" : item.minute + "'"}</span><div class="body">${body}</div>`;
   $("#feed").prepend(li);
@@ -491,20 +506,43 @@ const audio = (() => {
     master.gain.cancelScheduledValues(ctx.currentTime);
     master.gain.linearRampToValueAtTime(on ? 0.35 : 0.9, ctx.currentTime + 0.3);
   }
-  function speak(itemId) { voiceQueue.push(itemId); if (voiceQueue.length > 3) voiceQueue.shift(); next(); }
-  function next() {
-    if (speaking || !voiceQueue.length || !state.sound.voice) return;
-    speaking = true;
-    const id = voiceQueue.shift();
-    current = new Audio(`/api/audio/${id}`);
-    duck(true);
-    const done = () => { speaking = false; current = null; duck(false); next(); };
-    current.addEventListener("ended", done);
-    current.addEventListener("error", done);
-    current.play().catch(done);
+  // The voice follows the match, it never lags behind it:
+  // - a goal (or the match report) goes first: it cuts an ordinary line and clears the queue;
+  // - an ordinary line waits behind at most one other: a newer line replaces an older one;
+  // - a line that has waited too long is skipped, the match has moved on.
+  const STALE_MS = 12000;
+  let currentBig = false;
+  function speak(itemId, big = false) {
+    const entry = { id: itemId, big, at: Date.now() };
+    if (big) {
+      voiceQueue.length = 0;
+      if (current && !currentBig) { current.pause(); finish(); }
+    } else {
+      for (let i = voiceQueue.length - 1; i >= 0; i--) if (!voiceQueue[i].big) voiceQueue.splice(i, 1);
+    }
+    voiceQueue.push(entry);
+    next();
   }
-  function stopVoice() { voiceQueue.length = 0; if (current) current.pause(); speaking = false; duck(false); }
-  return { unlock, startMurmur, stopMurmur, crowdCues, speak, stopVoice };
+  function finish() { speaking = false; current = null; currentBig = false; duck(false); }
+  function next() {
+    if (speaking || !state.sound.voice) return;
+    let entry;
+    while ((entry = voiceQueue.shift()) && !entry.big && Date.now() - entry.at > STALE_MS) { /* skip */ }
+    if (!entry) return;
+    speaking = true; currentBig = entry.big;
+    const el = new Audio(`/api/audio/${entry.id}`);
+    current = el;
+    duck(true);
+    const done = () => { if (current === el) { finish(); next(); } };
+    el.addEventListener("ended", done);
+    el.addEventListener("error", done);
+    el.play().catch(done);
+  }
+  function endOfMatch() {                 // the whistle: only the match report is still to come
+    for (let i = voiceQueue.length - 1; i >= 0; i--) if (!voiceQueue[i].big) voiceQueue.splice(i, 1);
+  }
+  function stopVoice() { voiceQueue.length = 0; if (current) current.pause(); finish(); }
+  return { unlock, startMurmur, stopMurmur, crowdCues, speak, stopVoice, endOfMatch };
 })();
 
 function escapeHtml(s) {
