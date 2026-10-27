@@ -2,7 +2,7 @@
 
 Submission for the **Microsoft x Premier League "Inside the Game" Developer Hackathon**.
 
-**Live demo:** https://inside-the-game.thankfulplant-70010164.francecentral.azurecontainerapps.io/
+**Live demo:** https://inside-the-game-live.kindcliff-98748b22.francecentral.azurecontainerapps.io/
 **Demo video:** _link added at submission_
 
 A synthetic, Premier League-calibrated football match plays on a 2D pitch at real football

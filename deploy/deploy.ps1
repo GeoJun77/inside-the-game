@@ -19,7 +19,8 @@ SPEECH_REGION and, optionally, SPEECH_VOICE_EN and SPEECH_GOAL_STYLE.
 #>
 param(
     [string]$ResourceGroup = "rg-inside-the-game",
-    [string]$AppName = "inside-the-game",
+    [string]$AppName = "inside-the-game-live",
+    [string]$EnvName = "inside-the-game-standard",
     [string]$Location = "",
     [string]$Subscription = "Azure for Students",
     [string]$Image = ""          # an image already built and tagged on this computer: no rebuild
@@ -29,6 +30,11 @@ $ErrorActionPreference = "Stop"
 function Step($text) { Write-Host "`n==> $text" -ForegroundColor Cyan }
 # az is an external program: PowerShell does not stop on its errors by itself, so every
 # call is checked and the script stops at the first failure (nothing half-done after it)
+# "does it exist?" questions: a "not found" answer (or an extension warning) on stderr is
+# not an error here, so PowerShell must not stop on it
+function AzQuery { $old = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+    try { $out = & az @args 2>$null } finally { $ErrorActionPreference = $old }
+    $global:LASTEXITCODE = 0; return $out }
 function Check($what) { if ($LASTEXITCODE -ne 0) { throw "$what failed (see the message above). Stopped here." } }
 
 # ---------- settings from .env (values are never printed) ----------
@@ -119,38 +125,45 @@ $plain = @(
     "FOUNDRY_MODEL=$($settings['FOUNDRY_MODEL'])",
     "SPEECH_REGION=$($settings['SPEECH_REGION'])",
     "SPEECH_VOICE_EN=$(if ($settings['SPEECH_VOICE_EN']) { $settings['SPEECH_VOICE_EN'] } else { 'en-US-DavisNeural' })",
-    "SPEECH_GOAL_STYLE=$(if ($settings['SPEECH_GOAL_STYLE']) { $settings['SPEECH_GOAL_STYLE'] } else { 'spelled' })"
+    "SPEECH_GOAL_STYLE=$(if ($settings['SPEECH_GOAL_STYLE']) { $settings['SPEECH_GOAL_STYLE'] } else { 'spelled' })",
+    "SPEECH_KEY=secretref:speech-key"
 )
-$exists = az containerapp show --name $AppName --resource-group $ResourceGroup --query name -o tsv 2>$null
+# A STANDARD Container Apps environment: the "express" kind (what "az containerapp up" may
+# create) does not support a managed identity, and the app needs one to reach Foundry.
+$envExists = AzQuery containerapp env show --name $EnvName --resource-group $ResourceGroup --query name -o tsv --only-show-errors
+if (-not $envExists) {
+    az containerapp env create --name $EnvName --resource-group $ResourceGroup --location $Location `
+        --logs-destination none --only-show-errors | Out-Null
+    Check "Creating the Container Apps environment"
+}
+$exists = AzQuery containerapp show --name $AppName --resource-group $ResourceGroup --query name -o tsv --only-show-errors
 if ($exists) {
-    # a re-deployment: only the image and the settings change ("up" would resend the app's
-    # identity, which this kind of environment refuses in an update)
+    # a re-deployment: the Speech key, then the new image and settings
+    az containerapp secret set --name $AppName --resource-group $ResourceGroup `
+        --secrets "speech-key=$($settings['SPEECH_KEY'])" --only-show-errors | Out-Null
+    Check "Storing the Speech key"
     az containerapp update --name $AppName --resource-group $ResourceGroup --image $image `
         --set-env-vars $plain --only-show-errors | Out-Null
     Check "Updating the app to the new image"
 } else {
-    az containerapp up --name $AppName --resource-group $ResourceGroup --location $Location `
+    # one replica (each match lives in the app's memory), 1 vCPU / 2 GiB, the Speech key as
+    # a secret (never in the image, never printed), and a system-assigned managed identity
+    az containerapp create --name $AppName --resource-group $ResourceGroup --environment $EnvName `
         --image $image --registry-server $server --registry-username $regUser --registry-password $regPass `
-        --ingress external --target-port 8000 --env-vars $plain
+        --ingress external --target-port 8000 --min-replicas 1 --max-replicas 1 --cpu 1 --memory 2Gi `
+        --secrets "speech-key=$($settings['SPEECH_KEY'])" --env-vars $plain `
+        --system-assigned --only-show-errors | Out-Null
     Check "Creating the app"
 }
 
-# ---------- 3. the Speech key as a secret ----------
-Step "Storing the Speech key as a secret"
-az containerapp secret set --name $AppName --resource-group $ResourceGroup `
-    --secrets "speech-key=$($settings['SPEECH_KEY'])" --only-show-errors | Out-Null
-Check "Storing the Speech key"
-# One replica: each match lives in the app's memory. 1 vCPU / 2 GiB is plenty.
-az containerapp update --name $AppName --resource-group $ResourceGroup `
-    --set-env-vars "SPEECH_KEY=secretref:speech-key" `
-    --min-replicas 1 --max-replicas 1 --cpu 1 --memory 2Gi --only-show-errors | Out-Null
-Check "Updating the app settings"
-
-# ---------- 4. managed identity and the Foundry role ----------
-Step "Giving the app its identity and access to Foundry"
-$principal = az containerapp identity assign --name $AppName --resource-group $ResourceGroup `
-    --system-assigned --query principalId -o tsv
-Check "Assigning the managed identity"
+# ---------- managed identity and the Foundry role ----------
+Step "Giving the app access to Foundry"
+$principal = AzQuery containerapp show --name $AppName --resource-group $ResourceGroup --query identity.principalId -o tsv --only-show-errors
+if (-not $principal) {
+    $principal = az containerapp identity assign --name $AppName --resource-group $ResourceGroup `
+        --system-assigned --query principalId -o tsv
+    Check "Assigning the managed identity"
+}
 # the role names differ between tenants and Foundry versions: give the ones that exist
 # ("Azure AI User" on the new Foundry, "Azure AI Developer" and the Cognitive Services
 # user roles otherwise); at least one must succeed
@@ -167,7 +180,7 @@ foreach ($role in "Azure AI User", "Azure AI Developer", "Cognitive Services Use
 if (-not $granted) { throw "No Foundry role could be given to the app. Stopped here." }
 Write-Host "Roles given on Foundry: $($granted -join ', ')"
 
-# ---------- 5. the URL ----------
+# ---------- the URL ----------
 $fqdn = az containerapp show --name $AppName --resource-group $ResourceGroup `
     --query properties.configuration.ingress.fqdn -o tsv
 Step "Done"
