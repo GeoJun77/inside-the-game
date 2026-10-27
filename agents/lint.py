@@ -87,9 +87,27 @@ def flipped_scores(text: str, ctx) -> list[str]:
     return wrong
 
 
+# "text" and "speech" are the English commentator's words; only "subtitle" is translated.
+# Common function words of the other subtitle languages: three of them = not English.
+NOT_ENGLISH = re.compile(
+    r"\b(le|les|du|des|une|est|avec|pour|dans|qui|plus|tête|marque|frappe|"
+    r"el|los|las|del|una|con|por|para|gol|"
+    r"der|die|das|und|mit|ein|eine|"
+    r"il|della|degli|che|nel|"
+    r"uma|com|pelo|"
+    r"à|été|é)\b", re.I)
+
+
+def not_english(text: str) -> bool:
+    return len({w.lower() for w in NOT_ENGLISH.findall(text or "")}) >= 3
+
+
 def narrator(raw: str, ctx) -> list[str]:
     text = _text_of(raw)
     problems = []
+    if not_english(text):
+        problems.append('"text" and "speech" must be in English (the commentator is English); '
+                        'only "subtitle" is in the viewer\'s language.')
     if words := _hits(SPECULATION, text):
         problems.append(f"No guesses about the future or intentions: remove {', '.join(words)}. "
                         "Say only what happened.")

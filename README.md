@@ -1,17 +1,142 @@
-# Inside the Game: explainable match intelligence
+# Inside the Game: a live match broadcast run by five AI agents
 
-Submission for the **Microsoft x Premier League "Inside the Game" Developer Hackathon** (work in progress).
+Submission for the **Microsoft x Premier League "Inside the Game" Developer Hackathon**.
 
-This repository currently contains the **data and model layer** of the project:
+**Live demo:** https://inside-the-game.thankfulplant-70010164.francecentral.azurecontainerapps.io/
+**Demo video:** _link added at submission_
 
-1. **An explainable xG model** trained on real Premier League 2015/16 event data (StatsBomb Open Data), with freeze-frame features.
-2. **`matchsim`**, a synthetic match engine calibrated on the same real data, which streams football-realistic matches event by event, every shot scored and explained by that xG model.
+A synthetic, Premier League-calibrated football match plays on a 2D pitch at real football
+speed, and a studio of **five Microsoft Foundry agents** covers it live: an English
+commentator with subtitles in six languages, a stats analyst, a tactical analyst, a producer
+who builds each viewer's own show, and a router that answers viewer questions. Every number
+on screen is computed in Python from the event stream; the agents write, they never invent.
 
-The multi-agent layer (Microsoft Foundry), the live web app and the Azure deployment are built on top of this.
+> All clubs, players and managers are fictional (the *Albion Football League*). No Premier
+> League name, logo, footage or data is used in the app.
 
 ---
 
-## 1. Expected goals (xG) model
+## What you see
+
+- **The match, live.** A 2D pitch at real speed: a 30 m pass takes about two seconds, nobody
+  runs faster than about 8.5 m/s. Set pieces are set up before they are taken (free-kick
+  wall at 10 yards, corners, penalties), kick-offs follow the Laws (each team in its own
+  half), the offside line appears at the moment of the pass, the referee whistles fouls,
+  offsides and the end of each half.
+- **Three paces.** *Full match* (every action, about 45 min), *Extended highlights* (about
+  13 min) and *Key moments only* (about 6 min). The highlights choose which moves to show
+  (a move that ends in a shot shows its whole build-up) and cut between them like a TV edit;
+  they never speed the ball up.
+- **Commentary like on TV.** A play-by-play caller says the actions as they happen
+  ("Pickering for Thibault.", "Thibault shoots!", "Saved by Fairclough!"), written by Python
+  so it is instant and always right; the **Narrator agent** adds the colour: what it means,
+  who is playing well. Azure AI Speech voice (en-US-DavisNeural) with a stretched goal call,
+  a synthesised crowd that reacts to the play, subtitles in English, French, Spanish,
+  Portuguese, German or Italian.
+- **Live stats and ratings.** A Premier League-style stats panel, possession, shots, xG,
+  live player ratings and a golden ball on the current man of the match.
+- **Your show.** The Producer agent builds a personal show for each viewer (headline,
+  highlights, overlays) from their profile: fan or analyst, favourite club, language.
+- **Ask the studio.** Questions are routed to the right agent and answered with the match
+  as **you** have seen it so far (no spoilers, even though the agents work ahead).
+- **Behind the scenes.** Every agent call, its latency, retries, rewrites and fallbacks.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph Data
+        SB[(StatsBomb Open Data<br/>PL 2015/16)] --> XG[Explainable xG model]
+        SB --> CAL[Calibration aggregates]
+        XG --> SIM[matchsim<br/>synthetic match engine]
+        CAL --> SIM
+    end
+    SIM -- event stream --> ORCH[Orchestrator<br/>triggers, shared memory,<br/>supervisor]
+    ORCH --> NAR[Narrator]
+    ORCH --> STA[Stats Agent]
+    ORCH --> TAC[Tactical Analyst]
+    ORCH --> PRO[Producer]
+    ORCH --> ROU[Router]
+    NAR & STA & TAC & PRO & ROU -.function tools.-> TOOLS[Python match tools<br/>facts, xG, ratings]
+    NAR --> TTS[Azure AI Speech]
+    ORCH --> DIR[Look-ahead director<br/>segments 2 ahead]
+    TTS --> DIR
+    DIR -- Server-Sent Events --> WEB[Browser<br/>2D pitch, voice, crowd,<br/>stats, Ask the studio]
+    WEB -- questions --> ROU
+```
+
+| Agent | Role | Tools |
+|---|---|---|
+| **Narrator** | Live commentary (text, speech, excitement, subtitle) and the full-time report | factual feed built in Python; match state and player stats for the report |
+| **Stats Agent** | Numbers on demand: shots, xG, possession, player of the match and why | match tools (`get_match_state`, `get_player_stats`, `get_top_players`, windows) |
+| **Tactical Analyst** | Formations, pressing (PPDA), territory, the decisive spell, the effect of each tactical change | tactical tools computed from the events |
+| **Producer** | A personal show per viewer and a Premier League-style stats panel | producer tools |
+| **Router** | Sends each viewer question to the right agent, keeps delegated questions open | none (structured routing output) |
+
+**Python computes, the model writes.** Every number comes from a tool; outputs are
+structured (JSON schema); a rule checker (`agents/lint.py`) reviews every commentary line
+and answer (no speculation, no invented details, no causal claims from timing, no
+counter-attack the data does not show, scores written home team first) and asks for one
+rewrite with the exact problems when a rule is broken.
+
+**Orchestrator** (`agents/orchestrator.py`): event-driven triggers (commentary at key
+moments and every few minutes, stats panel every 15 minutes, review of each tactical change
+12 minutes later, half-time and full-time segments), studio notes shared between agents, one
+model call per distinct audience (not per viewer), a Supervisor with time limits, retries,
+a circuit breaker and fallbacks: the show never stops when an agent fails.
+
+**Look-ahead director** (`app/live.py`): prepares the broadcast at most two segments ahead of
+the viewer (agents, voices, stats), so the voice, the "GOAL" and the action land on the same
+frame; the browser plays each segment on one clock.
+
+## Run it
+
+**Online:** open the live demo link above.
+
+**Locally** (Python 3.12, an Azure subscription with a Microsoft Foundry project; Azure AI
+Speech is optional):
+
+```bash
+python -m venv .venv && .venv\Scripts\activate     # macOS/Linux: source .venv/bin/activate
+pip install -r requirements.txt
+az login                                            # the agents use your Azure identity
+```
+
+Create a `.env` file (never committed):
+
+```
+FOUNDRY_PROJECT_ENDPOINT=https://<resource>.services.ai.azure.com/api/projects/<project>
+FOUNDRY_MODEL=gpt-5-mini
+SPEECH_KEY=<optional>
+SPEECH_REGION=<optional, e.g. francecentral>
+```
+
+```bash
+python -m app.server        # http://127.0.0.1:8000
+python -m pytest -q         # tests
+```
+
+**Deploy to Azure Container Apps:** `.\deploy\deploy.ps1` (PowerShell, Docker Desktop
+running). It builds the image, pushes it to Azure Container Registry, creates the app, stores
+the Speech key as a secret and gives the app a **managed identity** with access to the
+Foundry resource: no API key in the image or in the code.
+
+## Engineering notes
+
+- **Credits protection:** at most 3 matches at the same time, sessions expire, one model call
+  per audience rather than per viewer, delegated answers cached across viewers.
+- **No spoilers:** questions are answered with the match context rewound to the viewer's
+  position, although the director works ahead.
+- **Synthetic but realistic:** 60-match check after the final-third realism pass (per team
+  per match): shots 12.9 vs 13.0 real, on target 4.42 vs 4.24, goals 1.40 vs 1.30, xG 1.38 vs
+  1.28; 61% of shots from inside the box; goals spread across positions (attacking
+  midfielders 38%, strikers 35%, wingers 14%, the rest from deeper players).
+
+---
+
+## The data layer
+
+### 1. Expected goals (xG) model
 
 Notebook: [`notebooks/explore_shots.ipynb`](notebooks/explore_shots.ipynb) · Code: [`xg/`](xg)
 
@@ -42,7 +167,7 @@ Our model captures **~81% of the log-loss improvement of StatsBomb's professiona
   {"label": "one-on-one with the keeper", "value": true, "effect": "increases"}]}
 ```
 
-## 2. `matchsim`: synthetic, Premier League-calibrated matches
+### 2. `matchsim`: synthetic, Premier League-calibrated matches
 
 The hackathon requires synthetic, football-realistic data. `matchsim` generates it from a fictional 20-club league (*Albion Football League*: invented clubs, players and managers, no real trademarks), with the structure of the Premier League and statistics calibrated on real PL data.
 
@@ -66,7 +191,7 @@ The hackathon requires synthetic, football-realistic data. `matchsim` generates 
 - An ordered event feed (passes, carries, dribbles, pressures, tackles, interceptions, shots, goals, fouls, cards, set pieces, substitutions, tactical changes, injuries), StatsBomb coordinates (120 x 80), plus a `match_state` event every 5 minutes (possession, xG, xG of the last 15 minutes, momentum, formations, player distance / top speed / sprints).
 - Player ratings (0-10) and player of the match. Season mode with squad rotation (fitness), standings, **The Geoffroy Award** (player of the season), Golden Boot, Playmaker, Golden Glove and Team of the Season.
 
-### Calibration (300 synthetic matches vs real PL 2015/16)
+#### Calibration (300 synthetic matches vs real PL 2015/16)
 
 Full report: [`docs/calibration_report.md`](docs/calibration_report.md) (`python tools/calibration_report.py 300`).
 
@@ -88,13 +213,13 @@ Full report: [`docs/calibration_report.md`](docs/calibration_report.md) (`python
 
 Goals are shared realistically between positions (strikers about half, wingers and attacking midfielders about a third, the rest from midfield and set-piece headers by centre-backs).
 
-Known gaps: fewer draws than in the real season (about 22% vs 28%), shots taken slightly further from goal, and about 8% fewer passes per match.
+Known gaps: fewer draws than in the real season (about 15 to 22% vs 28%), shots taken slightly further from goal, and about 8% fewer passes per match.
 
 All calibration numbers are **aggregated statistics** extracted by [`tools/calibrate_from_statsbomb.py`](tools/calibrate_from_statsbomb.py) into [`matchsim/calibration_data.py`](matchsim/calibration_data.py); no StatsBomb event data is redistributed.
 
 ---
 
-## Quick start
+## Match engine quick start
 
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
@@ -123,6 +248,10 @@ The same seed always produces the same match.
 ## Repository layout
 
 ```
+agents/                         the five Foundry agents, their tools, orchestrator, voice, crowd, rule checker
+app/                            FastAPI live server (SSE), look-ahead director, highlights, play-by-play, web front end
+deploy/deploy.ps1               Azure Container Apps deployment (managed identity, secrets)
+Dockerfile                      the web app image (no secret inside)
 notebooks/explore_shots.ipynb   data exploration, feature engineering, xG training and evaluation
 models/xg_model.joblib          trained xG pipeline
 xg/                             shared shot features, model loading, per-feature explanations

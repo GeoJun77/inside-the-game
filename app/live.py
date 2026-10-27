@@ -43,7 +43,11 @@ PITCH_TYPES = {"pass", "carry", "shot", "dribble", "duel", "interception", "foul
 STATS_AFTER = {"shot", "goal", "card", "period_end", "match_end"}   # live stats refresh points
 SEGMENT_MINUTES = 5          # a segment closes after this much play, or at a key moment
 FULL_MATCH_SEGMENT_MINUTES = 3   # the full match: the Narrator speaks more often
-LOOKAHEAD = 2                # segments prepared ahead of the slowest viewer
+LOOKAHEAD = 2                # segments prepared ahead of the slowest viewer (full match)
+# highlights play a segment much faster than the agents can prepare one: the director works
+# further ahead and in longer segments, so the pitch never waits for the studio
+HIGHLIGHTS_LOOKAHEAD = {2: 4, 3: 6}
+HIGHLIGHTS_SEGMENT_MINUTES = {2: 5, 3: 8}
 PROGRESS_TIMEOUT_S = 90      # a silent viewer stops holding the director back after this
 SUBTITLE_LANGUAGES = {"English", "French", "Spanish", "Portuguese", "German", "Italian"}
 
@@ -222,10 +226,12 @@ class LiveSession:
         return min(active) if active else self.seq
 
     def _direct(self) -> None:
-        full = self.speed <= 1.0
-        for start, batch in segments_of(self.events, FULL_MATCH_SEGMENT_MINUTES if full else SEGMENT_MINUTES):
+        pace = 1 if self.speed <= 1.0 else 2 if self.speed < 2.5 else 3
+        minutes = FULL_MATCH_SEGMENT_MINUTES if pace == 1 else HIGHLIGHTS_SEGMENT_MINUTES[pace]
+        ahead = LOOKAHEAD if pace == 1 else HIGHLIGHTS_LOOKAHEAD[pace]
+        for start, batch in segments_of(self.events, minutes):
             # stay a little ahead of the viewers, never far: questions see what they saw
-            while not self.stop_flag.is_set() and self.seq - self._slowest_seq() >= LOOKAHEAD:
+            while not self.stop_flag.is_set() and self.seq - self._slowest_seq() >= ahead:
                 time.sleep(0.2)
             if self.stop_flag.is_set():
                 return
