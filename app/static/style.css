@@ -101,6 +101,30 @@ input[type="radio"], input[type="checkbox"] { accent-color: var(--flood); width:
 .team { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .team.home { justify-content: flex-end; }
 .team-name { font: 700 clamp(20px, 2.4vw, 30px)/1 var(--display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc select {
+  background: transparent; color: var(--chalk); border: 1px solid var(--line); border-radius: var(--radius-s);
+  padding: 6px 8px; font: 600 14px/1 var(--body); cursor: pointer;
+}
+.cc select option { background: var(--turf); }
+/* live player ratings */
+.ratings h3 { margin: 18px 0 8px; font: 700 20px/1 var(--display); }
+.ratings-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.ratings h4 { margin: 0 0 6px; font: 600 15px/1.2 var(--body); color: var(--sage); }
+.ratings ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.ratings li { display: grid; grid-template-columns: 26px 1fr auto auto; align-items: center; gap: 6px; font-size: 14px; }
+.ratings li.off { opacity: 0.55; }
+.ratings li b { color: var(--sage); font-weight: 600; }
+.ratings li em { font: 700 16px/1 var(--display); font-style: normal; padding: 2px 6px; border-radius: 4px; background: var(--turf-2); min-width: 34px; text-align: center; }
+.ratings li em.hi { background: #2E7D4F; }
+.ratings li em.lo { background: #7A3B2E; }
+.ratings li.top span { font-weight: 700; }
+.golden-ball { width: 14px; height: 14px; border-radius: 50%; background: radial-gradient(circle at 35% 35%, #FFE58A, #F4C430 55%, #8A6A00); display: inline-block; }
+.hint { color: var(--sage); font-weight: 400; }
+.team.has-ball .team-name::after { content: ""; display: inline-block; width: 9px; height: 9px; margin: 0 0 4px 8px;
+  border-radius: 50%; background: var(--chalk); box-shadow: 0 0 0 3px rgba(241, 244, 236, 0.25); vertical-align: middle; }
+.team-text { display: flex; flex-direction: column; min-width: 0; }
+.team.away .team-text { align-items: flex-end; text-align: right; }
+.scorers { color: var(--sage); font: 500 14px/1.2 var(--body); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 32ch; }
 .team-bar { width: 10px; height: 34px; border-radius: 2px; background: var(--home); flex: none; }
 .away .team-bar { background: var(--away); }
 .score {
@@ -169,6 +193,14 @@ input[type="radio"], input[type="checkbox"] { accent-color: var(--flood); width:
   @keyframes chip-in { from { transform: translateX(-12px); opacity: 0; } to { transform: none; opacity: 1; } }
 }
 
+/* the commentator's subtitles, in the viewer's language, timed with the voice */
+.subtitle {
+  position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+  width: min(86%, 820px); margin: 0; padding: 8px 14px; text-align: center;
+  background: rgba(8, 20, 14, 0.82); border-radius: var(--radius-s);
+  font: 500 clamp(15px, 1.5vw, 19px)/1.35 var(--body); color: var(--chalk);
+}
+
 /* pre-match: line-ups over the pitch */
 .prematch {
   position: absolute; inset: 0; overflow: auto;
@@ -230,11 +262,11 @@ input[type="radio"], input[type="checkbox"] { accent-color: var(--flood); width:
 /* ---------- studio ---------- */
 .studio {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr);
   background: var(--turf);
   border-radius: var(--radius-m);
   min-height: 0;
-  max-height: calc(100vh - 120px);
+  height: calc(100vh - 120px);
   position: sticky; top: 16px;
 }
 .tabs { display: flex; gap: 4px; padding: 10px 10px 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
@@ -245,6 +277,26 @@ input[type="radio"], input[type="checkbox"] { accent-color: var(--flood); width:
 .tabs button[aria-selected="true"] { color: var(--chalk); border-bottom-color: var(--flood); }
 .panel { overflow-y: auto; padding: 16px; min-height: 0; }
 .empty { color: var(--sage); margin: 8px 0; }
+
+/* Ask the studio: its own conversation, the form at the bottom */
+.ask-panel { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
+.ask-panel .qa, .ask-panel .empty { padding: 16px 16px 0; }
+.qa { list-style: none; margin: 0; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
+.qa-item { display: flex; flex-direction: column; gap: 8px; }
+.qa-q { align-self: flex-end; max-width: 85%; background: var(--chalk); color: var(--night);
+  padding: 8px 12px; border-radius: 12px 12px 2px 12px; font-weight: 600; }
+.qa-q span { font: 600 13px/1 var(--display); margin-right: 8px; opacity: 0.6; }
+.qa-a { align-self: flex-start; max-width: 92%; background: var(--turf-2); padding: 10px 12px; border-radius: 12px 12px 12px 2px; }
+.qa-a p { margin: 6px 0 0; }
+.qa-a.pending { color: var(--sage); font-style: italic; }
+.qa-a.error { color: var(--card); }
+.qa-a.degraded .badge::after { content: " (backup)"; color: var(--card); }
+.ask-panel .ask { margin-top: auto; }
+.show-answers { display: grid; gap: 12px; margin-top: 16px; }
+.show-answer { background: var(--turf-2); border-radius: var(--radius-s); padding: 10px 12px; }
+.show-answer .who { font-size: 13px; color: var(--sage); }
+.show-answer .q { font-weight: 600; margin: 6px 0; }
+.show-answer p { margin: 0; }
 
 .feed { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
 .feed li { display: grid; grid-template-columns: 48px 1fr; gap: 10px; }
@@ -301,7 +353,8 @@ input[type="radio"], input[type="checkbox"] { accent-color: var(--flood); width:
 /* ---------- small screens ---------- */
 @media (max-width: 980px) {
   .stage { grid-template-columns: 1fr; padding: 16px; }
-  .studio { position: static; max-height: none; }
+  .studio { position: static; height: auto; max-height: none; }
+  .ask-panel { max-height: 70vh; }
   .panel { max-height: 60vh; }
   .agents { grid-template-columns: repeat(3, 1fr); }
 }
@@ -317,3 +370,6 @@ input[type="radio"], input[type="checkbox"] { accent-color: var(--flood); width:
   .vs { display: none; }
   .agents { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* what is being played: the full match or highlights */
+.phase.mode { display: block; font-size: 0.8em; opacity: 0.75; }

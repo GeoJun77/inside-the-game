@@ -74,6 +74,13 @@ last lines.
   appear, check each name again before writing.
 - If nothing notable happened, write one short line about who has the ball or the
   territory, based on the match situation.
+- A play-by-play caller has already said the bare actions on air as they happened
+  ("Pickering for Thibault.", "Thibault shoots!", "Saved by Rentería!"). You are the
+  colour: say what it means, do not simply repeat the call.
+- "Standout players so far" lists who is playing well, with the facts behind it. When one
+  of them features in the feed, or in a quiet spell, you may say so like a commentator
+  ("Pickering is having a fine game: a goal and two key passes"), using only those facts.
+  Not in every line.
 - Do not repeat what your last lines already said.
 - "Studio notes" are what the other agents (stats, tactical analyst) said on air. You may
   use one when it adds to the moment ("as our analyst pointed out, ..."), never contradict
@@ -113,11 +120,15 @@ Favourite club: only if the viewer has one, you may add a light touch of warmth 
 club (at most a few words, not in every line, never a chant or a rallying cry). Facts
 stay identical and the opponent is treated fairly.
 
-Language: write entirely in the requested language, with that language's natural football
-vocabulary (e.g. French: "frappe", "tête", "centre", "arrêt", "carton jaune"). Keep player,
-team, manager and stadium names exactly as given. Always use players' real names, never
-their nationality. The text will also be read aloud: write it to be spoken, no symbols,
-and no abbreviations like "xG" in fan mode.
+Language: this is a Premier League broadcast with an English commentator. "text" and
+"speech" are ALWAYS in English, whatever the viewer's language. "subtitle" is the same line
+as "text", translated faithfully into the viewer's subtitle language, with that language's
+natural football vocabulary (e.g. French: "frappe", "tête", "centre", "arrêt", "carton
+jaune"); nothing added, nothing left out. If the subtitle language is English, "subtitle"
+repeats "text". Keep player, team, manager and stadium names exactly as given. Always use
+players' real names, never their nationality. "speech" is read aloud: write it to be spoken,
+no symbols, and no abbreviations like "xG" in fan mode. Write formations with dashes
+("4-2-3-1").
 
 No markdown, no bullet lists, no emojis, no hashtags.
 """
@@ -128,8 +139,9 @@ OUTPUT_SCHEMA = {
         "text": {"type": "string", "description": "The commentary or the recap, shown on screen."},
         "speech": {"type": "string", "description": "The same moment written to be spoken live."},
         "excitement": {"type": "integer", "description": "1 (calm) to 5 (huge moment)."},
+        "subtitle": {"type": "string", "description": "The text, translated into the viewer's subtitle language."},
     },
-    "required": ["text", "speech", "excitement"],
+    "required": ["text", "speech", "excitement", "subtitle"],
     "additionalProperties": False,
 }
 
@@ -142,7 +154,8 @@ class ViewerSettings:
 
     def header(self) -> str:
         fav = self.favourite_team or "none (neutral viewer)"
-        return f"Settings: language={self.language}; audience={self.audience}; favourite_team={fav}"
+        return (f"Settings: commentary in English; subtitle_language={self.language}; "
+                f"audience={self.audience}; favourite_team={fav}")
 
     def tag(self) -> str:
         fan = f"/{self.favourite_team} fan" if self.favourite_team else ""
@@ -158,17 +171,19 @@ class Commentary:
     speech: str = ""
     audio: bytes | None = None
     crowd: list = field(default_factory=list)     # stadium reactions to this batch
+    subtitle: str = ""                            # the line in the viewer's subtitle language
 
 
-def parse_output(raw: str) -> tuple[str, str, int]:
-    """Read the structured answer (text, speech, excitement).
+def parse_output(raw: str) -> tuple[str, str, int, str]:
+    """Read the structured answer (text, speech, excitement, subtitle).
     Falls back to plain text if the answer is not valid JSON."""
     try:
         data = json.loads(raw)
         text = data["text"].strip()
-        return text, (data.get("speech") or text).strip(), max(1, min(5, int(data["excitement"])))
+        return (text, (data.get("speech") or text).strip(), max(1, min(5, int(data["excitement"]))),
+                (data.get("subtitle") or text).strip())
     except (json.JSONDecodeError, KeyError, TypeError, ValueError, AttributeError):
-        return raw.strip(), raw.strip(), 2
+        return raw.strip(), raw.strip(), 2, raw.strip()
 
 
 class Narrator:
@@ -201,6 +216,12 @@ class Narrator:
             m = s["momentum"]
             line += (f"; possession {s['possession_pct']['home']}%-{s['possession_pct']['away']}%"
                      f"; momentum {m['strength']}" + (f" for {m['favours']}" if m["favours"] else ""))
+        # standout players, by live rating, with the facts behind it (from minute 20)
+        if self.ctx.seen and match_minute(self.ctx.seen[-1]) >= 20:
+            top = [p for p in self.ctx.get_top_players(2)["ranking"] if p["live_rating"] >= 7.5 and p["facts"]]
+            if top:
+                line += "\nStandout players so far: " + "; ".join(
+                    f"{p['player']} ({p['team']}, rated {p['live_rating']:.1f}: {', '.join(p['facts'])})" for p in top)
         return line
 
     def _one(self, feed: list[str], situation: str, settings: ViewerSettings, minute: str,
@@ -210,10 +231,10 @@ class Narrator:
         studio = ("Studio notes: " + " | ".join(notes) + "\n") if notes else ""
         request = (f"LIVE\n{settings.header()}\n{situation}\n{studio}"
                    f"Your last lines: {previous}\nFeed:\n" + "\n".join(feed))
-        text, speech, excitement = parse_output(self.agent.ask(request))
+        text, speech, excitement, subtitle = parse_output(self.agent.ask(request))
         self.last_lines.setdefault(settings, []).append(text)
-        audio = self.voice.speak(speech, settings.language, excitement) if self.voice else None
-        return Commentary(minute, text, excitement, settings, speech, audio, cues)
+        audio = self.voice.speak(speech, "English", excitement) if self.voice else None   # English commentator
+        return Commentary(minute, text, excitement, settings, speech, audio, cues, subtitle)
 
     def comment(self, batch: list[dict], audiences: list[ViewerSettings],
                 notes: list[str] | None = None) -> dict[ViewerSettings, Commentary]:
@@ -231,9 +252,9 @@ class Narrator:
         return {c.settings: c for c in results}
 
     def recap(self, settings: ViewerSettings) -> Commentary:
-        text, speech, excitement = parse_output(self.recap_agent.ask(
+        text, speech, excitement, subtitle = parse_output(self.recap_agent.ask(
             f"RECAP\n{settings.header()}\nMatch: {self.teams['home']} vs {self.teams['away']}"))
-        return Commentary("FT", text, excitement, settings, speech)
+        return Commentary("FT", text, excitement, settings, speech, subtitle=subtitle)
 
 
 def commentary_batches(events: list[dict], every_minutes: int = 5):

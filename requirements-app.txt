@@ -1,0 +1,12 @@
+# What the live web app needs at run time (the container installs only this).
+# requirements.txt also has the tools for training the xG model and calibrating matchsim.
+numpy>=1.24
+pandas>=2.0
+scikit-learn>=1.5
+joblib>=1.3
+azure-ai-projects>=2.3.0
+azure-identity>=1.17
+python-dotenv>=1.0
+azure-cognitiveservices-speech>=1.40
+fastapi>=0.110
+uvicorn[standard]>=0.29

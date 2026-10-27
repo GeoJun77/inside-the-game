@@ -16,6 +16,7 @@ At half-time the studio segment (analysis, show plans) runs after the half-time 
 """
 from __future__ import annotations
 
+import dataclasses
 import queue
 import re
 import threading
@@ -24,7 +25,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 from agents import voice as voice_mod
-from agents.match_tools import MatchContext, match_minute, minute_label
+from agents.match_tools import MatchContext, formation_label, match_minute, minute_label
 from agents.narrator_agent import ViewerSettings
 from agents.narrator_feed import is_key_moment
 from agents.orchestrator import BroadcastItem, Orchestrator
@@ -32,14 +33,19 @@ from agents.producer_agent import ViewerProfile
 from agents.producer_tools import ProducerTools
 from matchsim import build_league, get_team, simulate_match
 from matchsim.formations import POSITION_XY
+from matchsim.ratings import player_match_stats
+from app.calls import FULL_MATCH_CALLS, MAX_CALLS, calls_for
+from app.highlights import condensed
 
 PITCH_TYPES = {"pass", "carry", "shot", "dribble", "duel", "interception", "foul", "card", "goal",
                "substitution", "period_start", "period_end", "kick_off", "goalkeeper", "offside",
                "clearance", "block", "ball_recovery", "tactical_change", "injury", "match_end", "pressure"}
 STATS_AFTER = {"shot", "goal", "card", "period_end", "match_end"}   # live stats refresh points
 SEGMENT_MINUTES = 5          # a segment closes after this much play, or at a key moment
+FULL_MATCH_SEGMENT_MINUTES = 3   # the full match: the Narrator speaks more often
 LOOKAHEAD = 2                # segments prepared ahead of the slowest viewer
 PROGRESS_TIMEOUT_S = 90      # a silent viewer stops holding the director back after this
+SUBTITLE_LANGUAGES = {"English", "French", "Spanish", "Portuguese", "German", "Italian"}
 
 
 def _pitch_event(e: dict, idx: int) -> dict:
@@ -66,7 +72,8 @@ def _pitch_event(e: dict, idx: int) -> dict:
         out.update(card=e["outcome"])
     elif e["type"] == "pass":
         out.update(recipient=d.get("recipient"), recipient_id=d.get("recipient_id"),
-                   pass_type=d.get("pass_type"), cross=bool(d.get("cross")))
+                   pass_type=d.get("pass_type"), cross=bool(d.get("cross")),
+                   high=d.get("height") not in (None, "Ground Pass"))
     elif e["type"] == "tactical_change":
         out.update(description=d.get("description"))
     elif e["type"] == "period_end":
@@ -74,14 +81,14 @@ def _pitch_event(e: dict, idx: int) -> dict:
     return out
 
 
-def segments_of(events: list[dict]):
+def segments_of(events: list[dict], minutes: int = SEGMENT_MINUTES):
     """Cut the match into segments: a key moment (goal, big chance, card, half-time...)
     closes a segment at once, otherwise it closes every SEGMENT_MINUTES of play."""
     batch, start, last_cut = [], 0, 0
     for i, e in enumerate(events):
         batch.append(e)
         minute = match_minute(e)
-        if is_key_moment(e) or minute - last_cut >= SEGMENT_MINUTES:
+        if is_key_moment(e) or minute - last_cut >= minutes:
             yield start, batch
             start, batch, last_cut = i + 1, [], minute
     if batch:
@@ -90,11 +97,17 @@ def segments_of(events: list[dict]):
 
 class LiveSession:
     def __init__(self, project, home: str, away: str, seed: int = 7, speed: float = 1.0):
-        self.id = uuid.uuid4().hex[:8]
+        self.id = uuid.uuid4().hex[:12]
+        self.created = time.time()
         league = build_league()
         self.events = simulate_match(get_team(league, home), get_team(league, away), seed=seed)
         self.start_info = self.events[0]["details"]
-        self.speed = min(3.0, max(0.3, float(speed)))   # pace: 1 = broadcast
+        self.speed = min(3.0, max(0.3, float(speed)))   # pace: 1 = match pace
+        self.hidden = condensed(self.events, self.speed)   # highlights: what the pitch does not show
+        self.mode = "Full match" if self.speed <= 1.0 else "Extended highlights" if self.speed < 2.5 else "Key moments"
+        self.captains = {"home": get_team(league, home).captain_id, "away": get_team(league, away).captain_id}
+        self.short = {p.id: p.short_name for code in (home, away) for p in get_team(league, code).players}
+        self.calls: dict[str, object] = {}            # "call-<idx>" -> Call, for the voice
         self.orch = Orchestrator(project, self.events, viewers={}, commentary_window=None, echo=False)
         self.orch.listeners.append(self._on_item)
         self.orch.background = ThreadPoolExecutor(max_workers=2)
@@ -119,12 +132,23 @@ class LiveSession:
         vid = "v" + uuid.uuid4().hex[:6]
         fav = profile.get("favourite_team") or None
         self.viewers[vid] = ViewerProfile(
-            name=profile.get("name") or "Viewer", language=profile.get("language") or "English",
+            name=profile.get("name") or "Viewer",
+            language=profile.get("language") if profile.get("language") in SUBTITLE_LANGUAGES else "English",
             audience=profile.get("audience") or "fan", favourite_team=fav,
             followed_player=profile.get("followed_player") or None)
         self.subscribers[vid] = queue.Queue()
         self.progress[vid] = {"seq": -1, "idx": 0, "at": time.time()}
         return vid
+
+    def set_subtitles(self, vid: str, language: str) -> None:
+        """Change a viewer's subtitles language during the match: the Narrator writes it
+        from the next segments it prepares."""
+        if vid in self.viewers and language in SUBTITLE_LANGUAGES:
+            self.viewers[vid] = dataclasses.replace(self.viewers[vid], language=language)
+
+    def _subtitle_language(self, vid: str) -> str:
+        v = self.viewers.get(vid)
+        return v.language if v and v.language in SUBTITLE_LANGUAGES else "English"
 
     def tag_of(self, vid: str) -> str:
         v = self.viewers[vid]
@@ -139,13 +163,13 @@ class LiveSession:
         h, a = s["home"], s["away"]
         return (f"Good evening, and welcome to {s['venue']}. {h['team']['name']} take on "
                 f"{a['team']['name']}, with {s['referee']} the referee. {h['team']['name']} line up in a "
-                f"{h['formation']}, {a['team']['name']} in a {a['formation']}. We are moments away from kick-off.")
+                f"{formation_label(h['formation'])}, {a['team']['name']} in a {formation_label(a['formation'])}. We are moments away from kick-off.")
 
     def init_payload(self, vid: str) -> dict:
         s = self.start_info
 
         def lineup(side):
-            return {"team": s[side]["team"], "formation": s[side]["formation"],
+            return {"team": s[side]["team"], "formation": formation_label(s[side]["formation"]),
                     "players": [{"id": p["id"], "name": p["name"], "short": p["short_name"], "number": p["number"],
                                  "slot": p["slot"]} for p in s[side]["starting_xi"]],
                     "bench": [{"id": p["id"], "name": p["name"], "short": p["short_name"], "number": p["number"],
@@ -154,8 +178,9 @@ class LiveSession:
                 "audience_tag": self.tag_of(vid), "home": lineup("home"), "away": lineup("away"),
                 "venue": s["venue"], "referee": s["referee"], "weather": s["weather"],
                 "attendance": s["attendance"], "positions": POSITION_XY, "status": self.status,
-                "speed": self.speed, "voice": self.voice is not None, "intro": self.intro_text(vid),
-                "intro_audio": self.voice is not None and self.viewers[vid].language == "English"}
+                "captains": self.captains,
+                "speed": self.speed, "mode": self.mode, "hidden_events": len(self.hidden), "voice": self.voice is not None, "intro": self.intro_text(vid),
+                "intro_audio": self.voice is not None}           # the commentator is always English
 
     # ---------- streaming ----------
     def serialize(self, it: BroadcastItem, seq: int | None = None) -> dict:
@@ -197,7 +222,8 @@ class LiveSession:
         return min(active) if active else self.seq
 
     def _direct(self) -> None:
-        for start, batch in segments_of(self.events):
+        full = self.speed <= 1.0
+        for start, batch in segments_of(self.events, FULL_MATCH_SEGMENT_MINUTES if full else SEGMENT_MINUTES):
             # stay a little ahead of the viewers, never far: questions see what they saw
             while not self.stop_flag.is_set() and self.seq - self._slowest_seq() >= LOOKAHEAD:
                 time.sleep(0.2)
@@ -232,27 +258,46 @@ class LiveSession:
         seq = self.seq + 1
         commentary = [it for it in produced if it.kind == "commentary"]
         crowd = next((it for it in produced if it.kind == "crowd"), None)
+        # play-by-play: short calls on the action itself, written by Python
+        calls = calls_for(batch, start, self.short, {}, self.hidden,
+                          FULL_MATCH_CALLS if self.speed <= 1.0 else MAX_CALLS)
+        for c in calls:
+            self.calls[c.key] = c
         # the voices, made now so they are ready before the segment is played
         if self.voice:
-            list(self.voice_pool.map(lambda it: self.audio(str(it.id)), commentary))
-        events, stats, last_shot = [], [], None
+            keys = [str(it.id) for it in commentary] + [c.key for c in calls]
+            list(self.voice_pool.map(self.audio, keys))
+        events, stats, last_shot, cut = [], [], None, False
         for offset, e in enumerate(batch):
             idx = start + offset
             if e["type"] == "shot":
                 last_shot = e
-            if e["type"] in PITCH_TYPES:
+            if idx in self.hidden:
+                cut = True                               # skipped: the next shown event says so
+            elif e["type"] in PITCH_TYPES:
                 ev = _pitch_event(e, idx)
+                if cut:
+                    ev["cut"], cut = True, False
                 if e["type"] == "goal" and last_shot is not None:
                     ev["shot_type"] = last_shot["details"].get("shot_type")
                     ev["body_part"] = last_shot["details"].get("body_part")
                 events.append(ev)
             if e["type"] in STATS_AFTER or offset == len(batch) - 1:
                 self.stats_ctx.seen = self.events[:idx + 1]
-                stats.append({"idx": idx, "panel": self.stats_tools.match_stats_panel()})
+                entry = {"idx": idx, "panel": self.stats_tools.match_stats_panel()}
+                if e["type"] in ("goal", "card") or offset == len(batch) - 1:
+                    # live player ratings (0-10), the same ones the agents read
+                    entry["ratings"] = {pid: round(r["rating"], 1)
+                                        for pid, r in player_match_stats(self.stats_ctx.seen).items()}
+                stats.append(entry)
         goal = next((ev["idx"] for ev in events if ev["type"] == "goal"), None)
         for vid in list(self.subscribers):
             line = next((it for it in commentary if self.visible(it, vid)), None)
             self._send(vid, {"event": "segment", "data": {
+                "calls": [{"idx": c.idx, "kind": c.kind, "text": c.text("English"),
+                           "subtitle": c.text(self._subtitle_language(vid)), "priority": c.priority,
+                           "audio": c.key if self.voice and self.audio_cache.get(c.key) else None}
+                          for c in calls],
                 "seq": seq, "events": events, "stats": stats, "goal_idx": goal,
                 "commentary": self.serialize(line, seq) if line else None,
                 "audio": f"{line.id}" if line and self.voice and self.audio_cache.get(str(line.id)) else None,
@@ -292,7 +337,7 @@ class LiveSession:
         ordinary line is cut to its first sentence so the voice keeps pace with the match;
         the match report is introduced by its headline."""
         text = (item.payload.get("speech") or item.payload.get("text", "")).strip()
-        if item.kind == "commentary" and item.payload.get("excitement", 2) >= 4:
+        if item.kind == "commentary" and item.payload.get("goal"):
             if not voice_mod.GOAL_WORD.match(text):
                 text = "GOAL! " + text
             return text
@@ -306,7 +351,12 @@ class LiveSession:
             if key in self.audio_cache:
                 return self.audio_cache[key]
         try:
-            if key.startswith("intro-"):
+            if key.startswith("call-"):
+                call = self.calls.get(key)
+                if not call:
+                    return None
+                data = self.voice.speak(call.text("English"), "English", call.excitement)
+            elif key.startswith("intro-"):
                 vid = key[6:]
                 if vid not in self.viewers:
                     return None
@@ -315,9 +365,9 @@ class LiveSession:
                 item = next((it for it in self.orch.timeline if str(it.id) == key), None)
                 if not item or item.kind not in ("commentary", "recap"):
                     return None
-                language = item.audience.split("/")[0] if "/" in item.audience else "English"
                 excitement = item.payload.get("excitement", 2) if item.kind == "commentary" else 2
-                data = self.voice.speak(self.spoken_text(item), language, excitement)
+                data = self.voice.speak(self.spoken_text(item), "English", excitement,
+                                        goal_call=bool(item.payload.get("goal")))
         except Exception as exc:              # noqa: BLE001 - no voice, the text is still on screen
             print(f"voice error: {type(exc).__name__}: {exc}")
             return None

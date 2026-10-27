@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from statistics import mean
 
-from agents.match_tools import MatchContext, _normalise, _round, minute_label
+from agents.match_tools import MatchContext, _normalise, _round, formation_label, minute_label
 
 FINAL_THIRD_X = 80          # x >= 80: attacking third
 OWN_60_PCT_X = 72           # x < 72: a team's own 60% of the pitch (used for PPDA)
@@ -77,7 +77,7 @@ class TacticalTools:
                 timeline.append({"minute": minute_label(e), "type": "tactical change",
                                  "reason": d["reason"].replace("_", " "),
                                  "description": d["description"],
-                                 "formation": f"{d['from_formation']} -> {d['to_formation']}",
+                                 "formation": f"{formation_label(d['from_formation'])} -> {formation_label(d['to_formation'])}",
                                  "mentality": f"{d['from_mentality']} -> {d['to_mentality']}",
                                  "instructions_changed": d["instructions_after"]})
             elif e["type"] == "substitution":
@@ -98,8 +98,8 @@ class TacticalTools:
             "team": t["name"],
             "manager": t["manager"],
             "identity": t["identity"],
-            "starting_formation": start["formation"],
-            "current_formation": formation,
+            "starting_formation": formation_label(start["formation"]),
+            "current_formation": formation_label(formation),
             "current_mentality": mentality,
             "players_on_pitch": len(on_pitch),
             "current_lineup": sorted(on_pitch.values(), key=lambda p: p["slot"]),
@@ -114,7 +114,7 @@ class TacticalTools:
                 "tempo": _level(instructions["tempo"], 40, 60, ("slow", "balanced", "fast")),
                 "players_in_box": instructions["players_in_box"],
             },
-            "alternative_formations": t["alt_formations"],
+            "alternative_formations": [formation_label(f) for f in t["alt_formations"]],
             "in_game_changes": timeline,
         }
 

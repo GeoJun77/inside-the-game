@@ -120,8 +120,9 @@ def goal_call_ssml(style: str = "spelled") -> str:
 
 
 def _phrase_ssml(phrase: str, voice: VoiceInfo, excitement: int, role: str, step: int,
-                 goal_style: str = "spelled") -> str:
-    match = GOAL_WORD.search(phrase) if role == "peak" and voice.kind != "hd" else None
+                 goal_style: str = "spelled", goal_call: bool = True) -> str:
+    # the stretched "GOOOAL" only for a real goal: "a shot on goal" stays a normal word
+    match = GOAL_WORD.search(phrase) if goal_call and role == "peak" and voice.kind != "hd" else None
     if match and excitement >= 4:
         # split the phrase around the goal call: "and he scores, GOAL! What a strike"
         before, after = phrase[:match.start()].strip(" ,"), phrase[match.end():].strip(" !,")
@@ -158,13 +159,25 @@ def _phrase_ssml(phrase: str, voice: VoiceInfo, excitement: int, role: str, step
     return body
 
 
-def build_ssml(text: str, voice: VoiceInfo, excitement: int = 2, goal_style: str = "spelled") -> str:
-    """SSML for a spoken line: phrase by phrase, with pauses between phrases."""
+DIGIT_WORDS = "zero one two three four five six seven eight nine".split()
+FORMATION = re.compile(r"\b(\d)-(\d)-(\d)(?:-(\d))?(?:-(\d))?\b")
+
+
+def say_formations(text: str) -> str:
+    """'4-2-3-1' is said "four-two-three-one", never "forty-two thirty-one"."""
+    return FORMATION.sub(lambda m: "-".join(DIGIT_WORDS[int(d)] for d in m.groups() if d), text)
+
+
+def build_ssml(text: str, voice: VoiceInfo, excitement: int = 2, goal_style: str = "spelled",
+               goal_call: bool = True) -> str:
+    """SSML for a spoken line: phrase by phrase, with pauses between phrases.
+    goal_call: False for any line that is not about a goal (no stretched "GOOOAL")."""
+    text = say_formations(text)
     excitement = max(1, min(5, int(excitement)))
     pause = f'<break time="{PAUSE_MS[excitement]}ms"/>'
     phrases = split_phrases(text) or [text]
     roles = phrase_roles(phrases, excitement)
-    inner = pause.join(_phrase_ssml(p, voice, excitement, r, i, goal_style)
+    inner = pause.join(_phrase_ssml(p, voice, excitement, r, i, goal_style, goal_call)
                        for i, (p, r) in enumerate(zip(phrases, roles)))
     return ('<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" '
             f'xmlns:mstts="http://www.w3.org/2001/mstts" xml:lang="{voice.locale}">'
@@ -230,10 +243,11 @@ class Voice:
             return self._chosen[language]
 
     def speak(self, text: str, language: str = "English", excitement: int = 2,
-              voice: VoiceInfo | None = None, goal_style: str | None = None) -> bytes:
+              voice: VoiceInfo | None = None, goal_style: str | None = None,
+              goal_call: bool = True) -> bytes:
         """MP3 bytes of the commentary line (a new synthesizer per call: thread-safe)."""
         voice = voice or self.voice_for(language)
-        ssml = build_ssml(text, voice, excitement, goal_style or self.goal_style)
+        ssml = build_ssml(text, voice, excitement, goal_style or self.goal_style, goal_call)
         result = self._synthesizer().speak_ssml_async(ssml).get()
         if result.reason != speechsdk.ResultReason.SynthesizingAudioCompleted:
             details = result.cancellation_details

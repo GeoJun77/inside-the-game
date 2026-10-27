@@ -40,6 +40,9 @@ RESULT_PHRASE = re.compile(r"\b(beat|beats|won|win|wins|winners|victory|ran out|
 # Internal names that must never reach the viewer.
 INTERNALS = re.compile(r"\b(get_\w+|summarize_period|list_shots|period summary|tool(s)?|function)\b", re.I)
 
+# Hedging where the data gives a clear answer: "should be the player of the match".
+HEDGE = re.compile(r"\b(should be|i think|i believe|in my opinion|arguably|probably|seems to be|appears to be)\b", re.I)
+
 SCORE = re.compile(r"\b(\d{1,2})\s?[-–]\s?(\d{1,2})\b")
 
 
@@ -115,6 +118,11 @@ def analyst(raw: str, ctx) -> list[str]:
                         "Give the numbers before and after it and say they coincided.")
     if words := _hits(OVER_PRECISE, text):
         problems.append(f"Round these numbers to two decimals: {', '.join(words)}.")
+    if re.match(r"\s*(at|by|after|in)\s+(the\s+)?\d+(\+\d+)?('|’|th|st|nd|rd)?(\s+minutes?)?,", text, re.I):
+        problems.append("Do not start with the minute: the app already shows it. Start with the answer.")
+    if words := _hits(HEDGE, text):
+        problems.append(f"No hedging ({', '.join(words)}): state what the data shows as a fact, "
+                        "with the reasons from the tools.")
     if words := _hits(INTERNALS, text):
         problems.append(f"Never mention your tools or data sources to the viewer ({', '.join(words)}).")
     if wrong := flipped_scores(text, ctx):

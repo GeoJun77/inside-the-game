@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections import Counter
 
-from agents.match_tools import minute_label
+from agents.match_tools import minute_label, formation_label
 
 SHOT_OUTCOME = {
     "Goal": "GOAL", "Saved": "saved by {gk}", "Saved to Post": "saved onto the post by {gk}",
@@ -129,8 +129,8 @@ def describe(events: list[dict], teams: dict, history: list[dict] = ()) -> list[
             spell.update(id=e["possession_id"], team=e["team"], minute=minute_label(e),
                          passes=0, into_box=False, shot=False)
         if t == "match_start":
-            lines.append(f"Kick-off: {teams['home']} ({d['home']['formation']}) vs "
-                         f"{teams['away']} ({d['away']['formation']}) at {d['venue']}, "
+            lines.append(f"Kick-off: {teams['home']} ({formation_label(d['home']['formation'])}) vs "
+                         f"{teams['away']} ({formation_label(d['away']['formation'])}) at {d['venue']}, "
                          f"referee {d['referee']}, {d['weather']}, attendance {d['attendance']}.")
         elif t == "period_start" and e["period"] == 2:
             lines.append(f"Second half under way. Score {e['score']['home']}-{e['score']['away']}.")

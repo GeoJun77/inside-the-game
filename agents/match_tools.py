@@ -18,6 +18,11 @@ def _normalise(text: str) -> str:
     return "".join(c for c in text if not unicodedata.combining(c)).lower().strip()
 
 
+def formation_label(f: str) -> str:
+    """'4231' -> '4-2-3-1', the way formations are written in football."""
+    return "-".join(f) if isinstance(f, str) and f.isdigit() else f
+
+
 def _round(value, digits: int):
     """Round numbers for the agents (they quote what they read); leave anything else as is."""
     return round(value, digits) if isinstance(value, (int, float)) and not isinstance(value, bool) else value
@@ -139,7 +144,8 @@ class MatchContext:
         if snapshot:
             state.update({
                 "momentum": self._momentum(snapshot["momentum"]),
-                "formations": snapshot["formations"],
+                "formations": {k: formation_label(v) for k, v in snapshot["formations"].items()}
+                if isinstance(snapshot["formations"], dict) else snapshot["formations"],
                 "mentality": snapshot["mentality"],
             })
         return state
@@ -247,6 +253,40 @@ class MatchContext:
         s.pop("player_id")
         return s
 
+    def get_top_players(self, count: int) -> dict:
+        """The best players so far by live rating, with the facts behind each rating; the
+        first one is the player of the match. Computed here, so the answer is a fact."""
+        stats = sorted(player_match_stats(self.seen).values(), key=lambda s: -s["rating"])
+        count = max(1, min(int(count or 3), 5))
+
+        def facts(s):
+            f = []
+            if s["goals"]:
+                f.append(f"{s['goals']} goal{'s' if s['goals'] > 1 else ''} from {round(s['xg'], 2)} xG")
+            if s["assists"]:
+                f.append(f"{s['assists']} assist{'s' if s['assists'] > 1 else ''}")
+            if s["shots"]:
+                f.append(f"{s['shots_on_target']} of {s['shots']} shots on target")
+            if s["key_passes"]:
+                f.append(f"{s['key_passes']} key passes")
+            if s["tackles"] + s["interceptions"] >= 4:
+                f.append(f"{s['tackles']} tackles and {s['interceptions']} interceptions")
+            if s["saves"]:
+                f.append(f"{s['saves']} saves")
+            if s["red_cards"]:
+                f.append("sent off")
+            return f
+        top = [{"player": s["player"], "team": self._team_name(s["team_id"]), "live_rating": s["rating"],
+                "minutes": s["minutes"], "facts": facts(s)} for s in stats[:count]]
+        out = {"minute": minute_label(self.seen[-1]) if self.seen else "0", "ranking": top}
+        if len(stats) > 1:
+            out["player_of_the_match"] = {
+                "player": stats[0]["player"], "team": self._team_name(stats[0]["team_id"]),
+                "live_rating": stats[0]["rating"],
+                "ahead_of_next_by": round(stats[0]["rating"] - stats[1]["rating"], 1),
+                "next_best": stats[1]["player"], "facts": facts(stats[0])}
+        return out
+
     # ---------- helpers ----------
     def _xg_between(self, from_minute: int, to_minute: int) -> dict:
         """Total xG of each side between two minutes (inclusive), from the shots seen."""
@@ -329,5 +369,14 @@ TOOL_SCHEMAS = [
                        "properties": {"player_name": {"type": "string",
                                                       "description": "Full name or surname of the player."}},
                        "required": ["player_name"], "additionalProperties": False},
+    },
+    {
+        "name": "get_top_players",
+        "description": "The best players so far by live rating, with the facts behind each rating. "
+                       "The first is the player of the match. Use it for 'who is the best player', "
+                       "'player of the match', 'who stood out'.",
+        "parameters": {"type": "object",
+                       "properties": {"count": {"type": "integer", "description": "How many players, 1 to 5."}},
+                       "required": ["count"], "additionalProperties": False},
     },
 ]

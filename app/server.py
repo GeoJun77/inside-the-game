@@ -10,6 +10,7 @@ Endpoints:
     POST /api/kickoff           start the match
     GET  /api/stream?viewer=..  live stream (Server-Sent Events): ready segments, items on air
     POST /api/ask               a viewer question, routed to the right agent(s)
+    POST /api/subtitles         switch the subtitles language during the match
     POST /api/progress          how far the browser has played (the director stays just ahead)
     GET  /api/audio/{key}       the commentator's voice for an item, or "intro-<viewer>" (MP3)
     GET  /api/crowd/{name}      stadium sound samples (WAV)
@@ -17,14 +18,19 @@ Endpoints:
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import queue
+import random
 import threading
+import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -38,10 +44,21 @@ ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
 CROWD_DIR = ROOT.parent / "data" / "audio" / "web"
 
-app = FastAPI(title="Inside the Game")
+@asynccontextmanager
+async def lifespan(_app):
+    # the stadium sounds (already built into the container image; made here when run locally)
+    threading.Thread(target=build_crowd_samples, daemon=True).start()
+    yield
+
+
+app = FastAPI(title="Inside the Game", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
-STATE = {"project": None, "session": None}
+# Several matches can run at once (one per visitor), each with its own id. The number is
+# capped to protect the Foundry quota; a finished or abandoned match frees its slot.
+MAX_SESSIONS = int(os.environ.get("MAX_SESSIONS", 3))
+SESSION_TTL_S = 25 * 60
+STATE: dict = {"project": None, "sessions": {}}
 LOCK = threading.Lock()
 
 
@@ -51,10 +68,23 @@ def project():
     return STATE["project"]
 
 
-def session() -> LiveSession:
-    if STATE["session"] is None:
-        raise HTTPException(404, "No match session. Create one first.")
-    return STATE["session"]
+def session(request: Request) -> LiveSession:
+    """The match of this browser: its id comes in the X-Session header (or ?s= for
+    the live stream and the audio, which the browser fetches by URL)."""
+    sid = request.headers.get("x-session") or request.query_params.get("s")
+    s = STATE["sessions"].get(sid or "")
+    if s is None:
+        raise HTTPException(404, "This match has ended or does not exist. Set up a new one.")
+    return s
+
+
+def _free_slots() -> None:
+    """Close the matches that are over or too old."""
+    now = time.time()
+    for sid, s in list(STATE["sessions"].items()):
+        if (s.status == "full_time" and now - s.created > 120) or now - s.created > SESSION_TTL_S:
+            s.stop()
+            del STATE["sessions"][sid]
 
 
 # ---------- stadium sounds, generated once ----------
@@ -70,6 +100,11 @@ CROWD_SAMPLES = {
     "boo_high_1": lambda: crowd.boo(0.8), "boo_high_2": lambda: crowd.boo(1.0),
     "applause_1": lambda: crowd.applause(0.4), "applause_2": lambda: crowd.applause(0.7),
     "anticipation_1": lambda: crowd.anticipation(0.5), "anticipation_2": lambda: crowd.anticipation(0.6),
+    # the referee: a foul or an offside, the kick-off, half-time (two blasts), full time (three)
+    "ref_short": lambda: crowd.referee_whistle((0.32,)),
+    "ref_kickoff": lambda: crowd.referee_whistle((0.75,)),
+    "ref_half": lambda: crowd.referee_whistle((0.45, 1.1), gap=0.22),
+    "ref_full": lambda: crowd.referee_whistle((0.45, 0.45, 1.4), gap=0.22),
 }
 
 
@@ -82,20 +117,32 @@ def build_crowd_samples() -> None:
             crowd.save_wav(x * (0.9 / (abs(x).max() + 1e-9)), path)
 
 
-@app.on_event("startup")
-def startup() -> None:
-    threading.Thread(target=build_crowd_samples, daemon=True).start()
-
-
 # ---------- pages ----------
+NO_CACHE = {"Cache-Control": "no-cache, no-store, must-revalidate"}
+
+
 @app.get("/")
 def index():
-    return FileResponse(STATIC / "index.html")
+    """The page, with its script and style versioned by their content: after an update the
+    browser always loads the new ones (never a stale app.js from its cache)."""
+    html = (STATIC / "index.html").read_text(encoding="utf-8")
+    for name in ("app.js", "style.css"):
+        version = hashlib.md5((STATIC / name).read_bytes()).hexdigest()[:10]
+        html = html.replace(f"/static/{name}\"", f"/static/{name}?v={version}\"")
+    return Response(content=html, media_type="text/html", headers=NO_CACHE)
+
+
+@app.middleware("http")
+async def no_stale_static(request, call_next):
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers.update(NO_CACHE)
+    return response
 
 
 @app.get("/api/health")
 def health():
-    return {"ok": True, "session": STATE["session"].id if STATE["session"] else None}
+    return {"ok": True, "matches": len(STATE["sessions"]), "max": MAX_SESSIONS}
 
 
 @app.get("/api/teams")
@@ -108,24 +155,28 @@ def teams():
 class SessionRequest(BaseModel):
     home: str = "HAR"
     away: str = "KES"
-    seed: int = 7
+    seed: int | None = None          # None: a new match, drawn at random
     speed: float = 1.0
 
 
 @app.post("/api/session")
 def create_session(req: SessionRequest):
     with LOCK:
-        if STATE["session"]:
-            STATE["session"].stop()
-        STATE["session"] = LiveSession(project(), req.home, req.away, req.seed, req.speed)
-    s = STATE["session"]
+        _free_slots()
+        if len(STATE["sessions"]) >= MAX_SESSIONS:
+            raise HTTPException(503, f"All {MAX_SESSIONS} match slots are in use. Try again in a few minutes.")
+        seed = req.seed or random.randint(1, 99999)
+        s = LiveSession(project(), req.home, req.away, seed, req.speed)
+        s.seed = seed
+        STATE["sessions"][s.id] = s
 
     def squad(side):
         info = s.start_info[side]
         return {"team": info["team"], "formation": info["formation"],
                 "players": [{"id": p["id"], "name": p["name"], "number": p["number"]}
                             for p in info["starting_xi"] + info["bench"]]}
-    return {"session": s.id, "home": squad("home"), "away": squad("away"), "venue": s.start_info["venue"]}
+    return {"session": s.id, "seed": s.seed, "home": squad("home"), "away": squad("away"),
+            "venue": s.start_info["venue"]}
 
 
 class JoinRequest(BaseModel):
@@ -137,21 +188,22 @@ class JoinRequest(BaseModel):
 
 
 @app.post("/api/join")
-def join(req: JoinRequest):
-    s = session()
+def join(req: JoinRequest, request: Request):
+    s = session(request)
     vid = s.join(req.model_dump())
     return s.init_payload(vid)
 
 
 @app.post("/api/kickoff")
-def kickoff():
-    session().start()
-    return {"status": session().status}
+def kickoff(request: Request):
+    s = session(request)
+    s.start()
+    return {"status": s.status}
 
 
 @app.get("/api/stream")
-def stream(viewer: str):
-    s = session()
+def stream(viewer: str, request: Request):
+    s = session(request)
     if viewer not in s.subscribers:
         raise HTTPException(404, "Unknown viewer")
     q = s.subscribers[viewer]
@@ -162,6 +214,8 @@ def stream(viewer: str):
             try:
                 msg = q.get(timeout=15)
             except queue.Empty:
+                if s.stop_flag.is_set():           # the match was closed: end the stream
+                    return
                 yield ": keep-alive\n\n"
                 continue
             yield f"event: {msg['event']}\ndata: {json.dumps(msg['data'], ensure_ascii=False)}\n\n"
@@ -176,13 +230,25 @@ class AskRequest(BaseModel):
 
 
 @app.post("/api/ask")
-def ask(req: AskRequest):
-    s = session()
+def ask(req: AskRequest, request: Request):
+    s = session(request)
     if req.viewer not in s.viewers:
         raise HTTPException(404, "Unknown viewer")
     if not req.question.strip():
         raise HTTPException(400, "Empty question")
     return {"items": s.ask(req.viewer, req.question.strip()[:400])}
+
+
+class SubtitlesRequest(BaseModel):
+    viewer: str
+    language: str
+
+
+@app.post("/api/subtitles")
+def subtitles(req: SubtitlesRequest, request: Request):
+    """Switch the commentator's subtitles to another language during the match."""
+    session(request).set_subtitles(req.viewer, req.language)
+    return {"ok": True}
 
 
 class ProgressRequest(BaseModel):
@@ -192,15 +258,15 @@ class ProgressRequest(BaseModel):
 
 
 @app.post("/api/progress")
-def progress(req: ProgressRequest):
+def progress(req: ProgressRequest, request: Request):
     """The browser says how far it has played: the director stays just ahead of it."""
-    session().report_progress(req.viewer, req.seq, req.idx)
+    session(request).report_progress(req.viewer, req.seq, req.idx)
     return {"ok": True}
 
 
 @app.get("/api/audio/{key}")
-def audio(key: str):
-    data = session().audio(key)
+def audio(key: str, request: Request):
+    data = session(request).audio(key)
     if not data:
         raise HTTPException(404, "No audio for this item")
     return Response(content=data, media_type="audio/mpeg", headers={"Cache-Control": "max-age=3600"})
@@ -215,10 +281,11 @@ def crowd_sample(name: str):
 
 
 @app.get("/api/metrics")
-def metrics():
-    s = session()
+def metrics(request: Request):
+    s = session(request)
     return {"agents": s.orch.supervisor.report(), "items_on_air": len(s.orch.timeline),
-            "memory_notes": len(s.orch.memory.notes), "status": s.status}
+            "memory_notes": len(s.orch.memory.notes), "status": s.status,
+            "rewrites": s.orch.rewrites()}
 
 
 if __name__ == "__main__":

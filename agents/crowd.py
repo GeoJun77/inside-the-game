@@ -156,6 +156,27 @@ def whistles(seconds: float, rng=None) -> np.ndarray:
     return out
 
 
+def referee_whistle(blasts: tuple[float, ...] = (0.35,), gap: float = 0.18) -> np.ndarray:
+    """The referee's pea whistle: a bright tone near 3 kHz, warbled about 30 times a second
+    by the pea inside, with a sharp start and a short tail. blasts: seconds of each blast."""
+    rng = _rng()
+    parts = []
+    for i, length in enumerate(blasts):
+        n = int(length * SR)
+        t = np.arange(n) / SR
+        f0 = rng.uniform(2900, 3200)
+        trill = 1 + 0.035 * np.sin(2 * np.pi * rng.uniform(26, 34) * t)            # the pea
+        phase = 2 * np.pi * np.cumsum(f0 * trill) / SR
+        tone = np.sin(phase) + 0.35 * np.sin(2 * phase) + 0.12 * np.sin(3 * phase)
+        am = 0.75 + 0.25 * np.sin(2 * np.pi * rng.uniform(26, 34) * t)
+        env = np.minimum(1, t / 0.015) * np.minimum(1, (length - t) / 0.06)
+        breath = 0.04 * rng.standard_normal(n)
+        parts.append((tone * am + breath) * np.clip(env, 0, 1))
+        if i < len(blasts) - 1:
+            parts.append(np.zeros(int(gap * SR)))
+    return np.concatenate(parts) * 0.7
+
+
 def applause(intensity: float = 0.5, seconds: float | None = None) -> np.ndarray:
     """Clapping: thousands of short bursts of noise at random times."""
     rng = _rng()

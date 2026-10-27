@@ -227,6 +227,13 @@ class MatchSimulator:
             return clamp(sx + (bx - 60) * 0.12, 2, 24), clamp(40 + (by - 40) * 0.15, 33, 47)
         x = sx + (bx - 60) * (0.42 + 0.2 * tac["line_height"]) + self.rng.gauss(0, 3.4)
         y = 40 + (sy - 40) * (0.75 + 0.45 * tac["width"]) + (by - 40) * 0.22 + self.rng.gauss(0, 3.4)
+        group = POSITION_GROUP[slot]
+        if bx > 85 and group in ("AM", "CM", "DM"):
+            # late runs from midfield: when the team attacks the final third, the midfielders
+            # push up, and now and then one arrives in the box
+            x += (bx - 85) * {"AM": 0.9, "CM": 0.8, "DM": 0.4}[group]
+            if self.rng.random() < {"AM": 0.26, "CM": 0.22, "DM": 0.07}[group] * (0.6 + 0.8 * tac.get("box_presence", 0.5)):
+                x, y = self.rng.uniform(94, 106), 40 + self.rng.gauss(0, 9)   # edge of the box, sometimes in it
         if x > 100:
             # the attacking line flattens around the box: strikers, wingers and runners
             # from midfield arrive at similar depths instead of the striker standing alone
@@ -656,15 +663,23 @@ class MatchSimulator:
         attack_mult = {"all_out_attack": 1.2, "attacking": 1.1, "defensive": 0.88}.get(ts.mentality, 1.0)
         # sustained possession pins the opponent back and opens space: chances grow with the pass chain
         attack_mult *= 0.55 + 0.085 * min(self.chain, 12)
+        if x > 96:
+            # in and around the box a counter-attack is as dangerous as a long move: no penalty
+            # for a short pass chain there (otherwise strikers through on goal pass it back)
+            attack_mult = max(attack_mult, 0.85 * {"all_out_attack": 1.2, "attacking": 1.1, "defensive": 0.9}.get(ts.mentality, 1.0))
 
         weights = {}
         if dist < 34 and x > 76:
             central = abs(y - GOAL_Y) < 18
-            weights["shot"] = ((0.195 if central else 0.039) + 1.4 * quick_xg(x, y)) \
+            weights["shot"] = 0.9 * ((0.195 if central else 0.039) + 1.4 * quick_xg(x, y)) \
                 * (1 + 0.5 * (p.a("finishing") - 60) / 40) * (0.6 if under_pressure else 1.0) * attack_mult \
                 * (1.25 if "Long shot taker" in p.traits and dist > 20 else 1.0) * (1 + 1.5 * edge) \
-                * {"ST": 0.62, "W": 1.15, "AM": 1.2, "CM": 1.0, "DM": 0.8, "FB": 0.65, "CB": 0.5, "GK": 0.05}[
-                    POSITION_GROUP[ts.lineup[p.id]]]
+                * {"ST": 0.5 if x < 100 else 0.6, "W": 1.2, "AM": 1.3, "CM": 1.2, "DM": 0.9, "FB": 0.8, "CB": 0.5,
+                   "GK": 0.05}[POSITION_GROUP[ts.lineup[p.id]]]
+            if x > 102 and abs(y - GOAL_Y) < 22:
+                weights["shot"] *= 0.62            # in the box: chosen often enough, without overdoing it
+            elif dist > 20:
+                weights["shot"] *= 1.0             # efforts from distance, about 40% of shots as in the PL
         if x > 86 and wide:
             weights["cross"] = (0.15 + 0.30 * tac["crossing"]) * attack_mult
         weights["dribble"] = (0.016 + 0.06 * max(0, p.a("dribbling") - 55) / 40) * (1.5 if x > 68 else 0.6) \
@@ -673,6 +688,8 @@ class MatchSimulator:
         if x < 28 and under_pressure:
             weights["clearance"] = 0.06 + 0.10 * tac["directness"]
         weights["pass"] = 1.0
+        if x > 102 and not wide:
+            weights["pass"] = 0.75                 # in the box the pass is no longer the default option
         if 57 < x < 102 and not wide:
             weights["through_ball"] = (0.02 + 0.075 * tac["through_balls"] * p.a("vision") / 80) * attack_mult
         action = self.rng.choices(list(weights), weights=list(weights.values()))[0]
@@ -697,10 +714,12 @@ class MatchSimulator:
                 w *= (1 + (0.5 + 0.9 * tac["directness"]) * max(0, dx) / 17)
                 if dx < -4:
                     w *= 0.5 + 0.35 * (1 - tac["directness"])
+                    if x > 100:
+                        w *= 0.4                   # from inside the box, players rarely play it back out
             if ts.lineup[q.id] == "GK":
                 w *= 0.25 if x < 45 else 0.01
             if qx > 80:
-                w *= {"ST": 0.45, "W": 1.15, "AM": 1.3, "CM": 1.15, "DM": 0.9, "FB": 0.95, "CB": 0.6}.get(
+                w *= {"ST": 0.38, "W": 1.2, "AM": 1.35, "CM": 1.3, "DM": 0.95, "FB": 1.0, "CB": 0.6}.get(
                     POSITION_GROUP[ts.lineup[q.id]], 1.0)
             cands.append(q)
             ws.append(max(w, 1e-4))
@@ -798,7 +817,7 @@ class MatchSimulator:
         runners = [q for q in ts.on_pitch if POSITION_GROUP[ts.lineup[q.id]] in ("ST", "W", "AM", "CM") and q is not p]
         if not runners:
             return self._a_pass(i, p, x, y, up, edge)
-        q = max(self.rng.sample(runners, min(3, len(runners))), key=lambda r: r.a("pace_skill") + self.rng.uniform(0, 15))
+        q = max(self.rng.sample(runners, min(3, len(runners))), key=lambda r: r.a("pace_skill") + self.rng.uniform(0, 28))
         ex = clamp(x + self.rng.uniform(17, 34), x + 9, 112)
         ey = clamp(GOAL_Y + self.rng.gauss(0, 11), 10, 70)
         otac = self.ts[1 - i].tactics
@@ -886,7 +905,7 @@ class MatchSimulator:
         # cut-back: from near the byline, a ground pass back to the penalty spot area
         if set_piece is None and x > 106 and self.rng.random() < 0.2:
             ex, ey = self.rng.uniform(100, 108), clamp(GOAL_Y + self.rng.gauss(0, 7), 28, 52)
-            q = max(self.rng.sample(targets, min(3, len(targets))), key=lambda z: z.a("finishing") + self.rng.uniform(0, 15))
+            q = max(self.rng.sample(targets, min(3, len(targets))), key=lambda z: z.a("finishing") + self.rng.uniform(0, 30))
             prob = clamp(0.5 + (p.a("passing") - 70) / 220 + edge * 0.3, 0.3, 0.75)
             det = self._pass_details(x, y, ex, ey, q, "cut_back", round((1 - prob) * 12, 1), cut_back=True)
             if self.rng.random() < prob:
@@ -898,14 +917,15 @@ class MatchSimulator:
             self._failed_pass(i, p, x, y, ex, ey, det, up, 1.2)
             return
 
-        in_box = {"ST": 1.0, "W": 0.7, "AM": 0.6, "CM": 0.45, "DM": 0.25, "FB": 0.2,
+        # who is in the box for the cross: not only the striker, the late runners too
+        in_box = {"ST": 0.9, "W": 0.75, "AM": 0.75, "CM": 0.6, "DM": 0.3, "FB": 0.3,
                   "CB": 0.9 if set_piece else 0.05}
         targets = [q for q in targets if self.rng.random() < in_box.get(POSITION_GROUP[ts.lineup[q.id]], 0.3)] or targets
         ex, ey = self.rng.uniform(102, 116), clamp(GOAL_Y + self.rng.gauss(0, 7), 25, 55)
         prob = clamp(0.29 + (p.a("crossing") - 70) / 230 + edge * 0.3 - (0.04 if up else 0)
                      + (0.06 if set_piece == "corner" else 0) + 0.06 * (tac["box_presence"] - 0.5), 0.08, 0.52)
-        q = max(self.rng.sample(targets, min(3, len(targets))),
-                key=lambda z: z.a("heading") + (z.height_cm - 180) * 0.5 + self.rng.uniform(0, 15))
+        q = max(self.rng.sample(targets, min(3, len(targets))),      # who gets to it: timing matters as much as height
+                key=lambda z: z.a("heading") + (z.height_cm - 180) * 0.5 + self.rng.uniform(0, 32))
         kind = {"corner": "corner", "free_kick": "free_kick"}.get(set_piece, "cross")
         det = self._pass_details(x, y, ex, ey, q, kind, round(clamp((1 - prob) * 12, 0, 10), 1), "High Pass",
                                  cross=True)

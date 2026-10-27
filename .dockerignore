@@ -1,0 +1,17 @@
+# Never in the image: secrets, local environments, caches, generated data.
+.env
+.env.*
+.venv/
+.git/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ipynb_checkpoints/
+data/
+notebooks/
+tests/
+tools/
+docs/
+*.pkl
+*.parquet
+deploy/

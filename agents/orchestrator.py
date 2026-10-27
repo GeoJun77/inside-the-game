@@ -286,9 +286,11 @@ class Orchestrator:
         result, ok = self.supervisor.run("narrator", lambda: self.narrator.comment(batch, audiences, notes),
                                          fallback=fallback)
         if ok and result:
+            goal = any(e["type"] == "goal" for e in batch)          # the only lines with a goal call
             for c in result.values():
                 self.publish(BroadcastItem(c.minute, "commentary", "narrator", c.settings.tag(),
-                                           {"text": c.text, "speech": c.speech, "excitement": c.excitement}))
+                                           {"text": c.text, "speech": c.speech, "excitement": c.excitement,
+                                            "subtitle": getattr(c, "subtitle", ""), "goal": goal}))
             cues = next(iter(result.values())).crowd
             if cues:
                 self.publish(BroadcastItem(self.minute, "crowd", "crowd", "all",
@@ -390,7 +392,8 @@ class Orchestrator:
         for s in {ViewerSettings(v.language, v.audience) for v in self.viewers.values()}:
             recap, ok = self.supervisor.run("recap", lambda s=s: self.narrator.recap(s))
             if ok:
-                self.publish(BroadcastItem("FT", "recap", "narrator", s.tag(), {"text": recap.text}))
+                self.publish(BroadcastItem("FT", "recap", "narrator", s.tag(),
+                                           {"text": recap.text, "subtitle": getattr(recap, "subtitle", "")}))
         self._plans("FULL_TIME")
 
     # ---------- viewer questions ----------

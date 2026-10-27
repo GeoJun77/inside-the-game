@@ -30,14 +30,14 @@
           </label>
         </div>
         <div class="row">
-          <label>Match seed
-            <input id="seed" type="number" value="7" min="1" max="99999">
+          <label>Match number <small class="hint">(empty = a new match)</small>
+            <input id="seed" type="number" min="1" max="99999" placeholder="New match" title="Leave empty for a new match every time. Enter a number to replay that exact match.">
           </label>
           <label>Match speed
             <select id="speed">
-              <option value="0.77">Relaxed (about 12 min)</option>
-              <option value="1" selected>Broadcast (about 9 min)</option>
-              <option value="1.6">Quick (about 6 min)</option>
+              <option value="1" selected>Full match, real speed (about 45 min)</option>
+              <option value="2">Extended highlights (about 13 min)</option>
+              <option value="3">Key moments only (about 6 min)</option>
             </select>
           </label>
         </div>
@@ -61,10 +61,11 @@
           </label>
         </div>
         <div class="row">
-          <label>Commentary language
-            <select id="language">
-              <option>English</option><option>French</option><option>Spanish</option>
-              <option>Portuguese</option><option>German</option><option>Italian</option>
+          <label>Subtitles
+            <select id="language" title="The commentator speaks English, like on Premier League TV. Subtitles are in English; you can switch language at any time during the match.">
+              <option value="English" selected>English (EN)</option><option value="French">French (FR)</option>
+              <option value="Spanish">Spanish (ES)</option><option value="Portuguese">Portuguese (PT)</option>
+              <option value="German">German (DE)</option><option value="Italian">Italian (IT)</option>
             </select>
           </label>
           <fieldset class="choice compact">
@@ -82,11 +83,20 @@
   <!-- ===================== the broadcast ===================== -->
   <main id="broadcast" class="broadcast" hidden>
     <header class="scoreboard" aria-live="polite">
-      <div class="team home"><span class="team-bar" id="home-bar"></span><span id="home-name" class="team-name"></span></div>
+      <div class="team home"><span class="team-bar" id="home-bar"></span><span class="team-text"><span id="home-name" class="team-name"></span><small id="home-scorers" class="scorers"></small></span></div>
       <div class="score"><span id="home-score">0</span><span class="dash">–</span><span id="away-score">0</span></div>
-      <div class="team away"><span id="away-name" class="team-name"></span><span class="team-bar" id="away-bar"></span></div>
-      <div class="clock"><span id="clock">0'</span><span id="phase" class="phase">Pre-match</span></div>
+      <div class="team away"><span class="team-text"><span id="away-name" class="team-name"></span><small id="away-scorers" class="scorers"></small></span><span class="team-bar" id="away-bar"></span></div>
+      <div class="clock"><span id="clock">0'</span><span id="phase" class="phase">Pre-match</span><span id="mode" class="phase mode"></span></div>
       <div class="sound-toggles">
+        <label class="cc" title="Subtitles of the commentator">
+          <span class="sr-only">Subtitles</span>
+          <select id="cc">
+            <option value="English">CC EN</option><option value="French">CC FR</option>
+            <option value="Spanish">CC ES</option><option value="Portuguese">CC PT</option>
+            <option value="German">CC DE</option><option value="Italian">CC IT</option>
+            <option value="off">CC off</option>
+          </select>
+        </label>
         <button id="toggle-voice" class="toggle" aria-pressed="true" title="Commentator voice">Voice</button>
         <button id="toggle-crowd" class="toggle" aria-pressed="true" title="Stadium sound">Crowd</button>
       </div>
@@ -97,6 +107,7 @@
         <div class="pitch-wrap">
           <canvas id="pitch" width="1240" height="840" aria-label="Animated pitch showing the ball and the players"></canvas>
           <div id="chip" class="chip" hidden aria-live="polite"></div>
+          <p id="subtitle" class="subtitle" hidden aria-live="polite"></p>
           <div id="moment" class="moment" hidden></div>
           <div id="prematch" class="prematch" hidden></div>
         </div>
@@ -119,6 +130,7 @@
           <button role="tab" aria-selected="true" data-tab="feed">Live</button>
           <button role="tab" aria-selected="false" data-tab="stats">Stats</button>
           <button role="tab" aria-selected="false" data-tab="show">Your show</button>
+          <button role="tab" aria-selected="false" data-tab="ask">Ask the studio</button>
           <button role="tab" aria-selected="false" data-tab="agents">Behind the scenes</button>
         </nav>
 
@@ -128,20 +140,26 @@
         </div>
         <div class="panel" id="tab-stats" role="tabpanel" hidden>
           <div id="stats-panel" class="stats-panel"><p class="empty">The stats panel appears after 15 minutes.</p></div>
+          <div id="ratings" class="ratings" aria-label="Live player ratings"></div>
         </div>
         <div class="panel" id="tab-show" role="tabpanel" hidden>
           <div id="show-plan"><p class="empty">Your Producer prepares a personal show at half-time and full time.</p></div>
+          <div id="show-answers" class="show-answers"></div>
+        </div>
+        <div class="panel ask-panel" id="tab-ask" role="tabpanel" hidden>
+          <ol id="qa" class="qa" aria-live="polite"></ol>
+          <p id="qa-empty" class="empty">Ask anything about the match. The Router sends your question to the Stats agent or the Tactical analyst, who answer with the match as you have seen it so far.</p>
+          <form id="ask-form" class="ask">
+            <label for="question" class="sr-only">Ask the studio</label>
+            <input id="question" type="text" maxlength="300" autocomplete="off" placeholder="Ask the studio: why is it still level?">
+            <button type="submit" class="btn-primary">Ask</button>
+            <div id="suggestions" class="suggestions"></div>
+          </form>
         </div>
         <div class="panel" id="tab-agents" role="tabpanel" hidden>
           <div id="agents-metrics"><p class="empty">Each agent's calls and response times appear here as the match runs.</p></div>
         </div>
 
-        <form id="ask-form" class="ask">
-          <label for="question" class="sr-only">Ask the studio</label>
-          <input id="question" type="text" maxlength="300" autocomplete="off" placeholder="Ask the studio: why is it still level?">
-          <button type="submit" class="btn-primary">Ask</button>
-          <div id="suggestions" class="suggestions"></div>
-        </form>
       </section>
     </div>
   </main>
