@@ -3,7 +3,7 @@
 Submission for the **Microsoft x Premier League "Inside the Game" Developer Hackathon**.
 
 **Live demo:** https://inside-the-game-live.kindcliff-98748b22.francecentral.azurecontainerapps.io/
-**Demo video:** _link added at submission_
+**Demo video:** https://youtu.be/4n3CN6MC0hM
 
 A synthetic, Premier League-calibrated football match plays on a 2D pitch at real football
 speed, and a studio of **five Microsoft Foundry agents** covers it live: an English

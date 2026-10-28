@@ -736,7 +736,7 @@ function renderItem(item, fromHistory = false) {
   li.className = `${item.kind}${item.degraded ? " degraded" : ""}${p.excitement >= 4 ? " big" : ""}`;
   let body = "";
   if (item.kind === "commentary") {
-    body = `<p>${escapeHtml(p.subtitle || p.text)}</p>`;
+    body = `<p>${escapeHtml(p.text)}</p>`;                 // Live is always in English (subtitles carry the translation)
   } else if (item.kind === "analysis") {
     body = `<div class="who">Tactical analyst</div><p>${escapeHtml(p.text)}</p>`;
   } else if (item.kind === "answer") {           // answers live in their own places, not in Live
@@ -745,7 +745,7 @@ function renderItem(item, fromHistory = false) {
     body = `<div class="who">Producer, for you</div><p>${escapeHtml(p.headline)}</p>
             ${p.alert ? `<p>${escapeHtml(p.alert)}</p>` : ""}`;
   } else if (item.kind === "recap") {
-    body = `<div class="who">Match report</div><p>${escapeHtml(p.subtitle || p.text)}</p>`;
+    body = `<div class="who">Match report</div><p>${escapeHtml(p.text)}</p>`;
     showSubtitles(splitSentences(p.subtitle || p.text).slice(0, 1), 6000);
     if (!fromHistory && state.sound.voice && state.init.voice) audio.playUrl(withSession(`/api/audio/${item.id}`));
   } else return;
